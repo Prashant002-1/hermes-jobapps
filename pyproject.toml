@@ -1,0 +1,16 @@
+[project]
+name = "hermes-jobapps"
+version = "0.1.0"
+description = "Local-first AI job application cockpit with Hermes agent tools and SQLite workflow state."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "JobApps maintainers" }]
+keywords = ["agents", "job-search", "sqlite", "hermes", "local-first", "workflow"]
+dependencies = []
+
+[project.scripts]
+hermes-jobapps = "hermes_jobapps.server:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

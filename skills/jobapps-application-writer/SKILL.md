@@ -1,0 +1,141 @@
+---
+name: jobapps-application-writer
+description: Generic public template for drafting or tailoring resume notes, cover letters, and application answers.
+version: 1.0.0
+author: Hermes Agent
+license: MIT
+metadata:
+  hermes:
+    tags: [job-search, resume, cover-letter, writing]
+    related_skills: [jobapps-role-evaluator, applicant-voice]
+---
+
+# JobApps Application Writer
+
+## Purpose
+
+Generate application materials that sound like the applicant and stay grounded in truth. The goal is not generic polish. The goal is shipped applications with the right angle for the role.
+
+This public skill is intentionally generic. Replace it with a private/local skill that reflects your own voice rules, resume strategy, proof-point policy, banned phrases, target roles, and material templates.
+
+## Required Context
+
+Read JobApps database context first. It should contain:
+
+- profile facts
+- experience narratives
+- project/research narratives
+- proof points
+- previous application choices, tailoring requirements, portrayal decisions, learning patterns, and material-change records
+- skills rotation rules
+- resume rules and active LaTeX templates
+- cover letter rules
+- outreach rules
+- voice and banned phrases
+
+Use JobApps database facts, proof points, learning patterns, and app-owned materials as runtime context. Do not browse or reuse old Downloads resumes, cover letters, CVs, private seed files, LinkedIn exports, website copy, or generated variants as live material sources.
+
+If writing in a specific personal voice, load your private voice/style skill from your local Hermes profile or private repo. Do not publish personal voice rules in this public skill.
+
+## Resume Tailoring Rules
+
+- One page enforced.
+- Do not modify formatting rules just to fit more content.
+- Tailor by choosing the right slice of real work, not inventing work.
+- Start from `tailoring_requirements`; each meaningful change should answer a JD need.
+- Apply `learning_patterns` before choosing phrasing or emphasis.
+- Record the framing choice as a `portrayal_decision` when it changes how the applicant is presented.
+- Use role-family ordering from database/config.
+- Use numbers only when they are load-bearing.
+- Project header tags should be few and high-signal.
+- Drop padding tools and broad skill inventories.
+- Save resume builds as LaTeX.
+- Rotate sections by role using database/config rules. Common role families include software engineering, data engineering, full-stack, backend, AI/ML, analytics, research, IT, internships, and contract roles.
+- Prefer current, user-confirmed proof signals from the database. Public examples must remain synthetic; private employer, school, GPA, immigration, or project details belong in local profile facts and proof points.
+- Use education, GPA, graduation wording, legal work-status language, and headline rules only when they are present in local profile/config records or explicitly supplied by the user.
+- Treat new impact claims from the CV/knowledge base, such as funding, media, number of pantries, user counts, or exact performance effects, as candidate proof until confirmed or supported by a reliable source.
+
+## Cover Letter Rules
+
+- Flowing paragraphs only.
+- No bullets.
+- No headers beyond the required letter header structure if generating the full document.
+- 350–400 words unless the prompt asks otherwise.
+- No em dashes.
+- Open with a real idea about the problem space, not generic enthusiasm.
+- Anchor the letter in one engineering story.
+- Connect to the company specifically.
+- Close directly. No corporate filler.
+- Save cover-letter builds as LaTeX.
+- A strategic letter should add narrative and company/problem insight, not repeat the resume bullet-by-bullet.
+
+## Short Answer Rules
+
+- Answer the prompt directly.
+- Use one concrete proof point.
+- Avoid resume-regurgitation.
+- Prefer mechanism over adjective.
+- If the answer asks for motivation, explain the problem that pulls the applicant in.
+
+## Voice Rules
+
+Use configured voice rules. Generic defaults:
+
+- direct sentences
+- technical specificity
+- concrete mechanisms
+- conviction without performance
+- honest constraints when needed
+
+Avoid generic filler and any phrase listed in local banned-phrase records. Common public-safe examples:
+
+- generic passion language
+- inflated metrics
+- tool name-dropping
+- corporate enthusiasm
+- "I would be excited to"
+- "I am thrilled to"
+- "I would be happy to"
+- "particularly" when it is filler
+- "cutting-edge"
+- "fast-paced environment"
+- "leverage" when it is consulting-slide filler
+
+## Drafting Loop
+
+1. Read the blocker preflight and tailoring requirements.
+2. Pick the central angle.
+3. Select active, user-confirmed proof points from JobApps database records.
+4. Apply relevant learning patterns.
+5. Draft only the requested material.
+6. Run a voice pass.
+7. Run a truth pass.
+8. Record which requirement drove each meaningful material change.
+9. Record portrayal decisions for material framing.
+10. Surface any uncertainty instead of hiding it.
+11. If a stronger claim needs a project that does not exist yet, call it a build-now differentiator with the exact artifact and deadline. Do not claim it as done.
+
+## Output Style
+
+When returning materials to the app or user, include:
+
+- final draft
+- why this angle was chosen
+- tailoring requirements answered
+- source proof points used
+- portrayal decisions made
+- reusable learning patterns discovered
+- risks or missing facts
+- suggested database material/change records when tools are unavailable
+
+Keep the explanation short. The draft is the artifact.
+
+## Verification
+
+- [ ] No invented claims.
+- [ ] No banned phrasing.
+- [ ] No em dashes.
+- [ ] The draft maps to the job's actual tailoring requirements.
+- [ ] Resume and cover-letter builds are LaTeX when saved as app materials.
+- [ ] Material changes have reasons, tailoring requirements, portrayal decisions, and proof points.
+- [ ] The writing sounds like a thoughtful applicant, not a resume generator.

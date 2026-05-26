@@ -1,0 +1,166 @@
+{
+  "database_path": "data/hermes-jobapps.sqlite3",
+  "materials_path": "data/materials",
+  "latex": {
+    "compiler_order": ["tectonic", "latexmk", "xelatex", "pdflatex"],
+    "compiler_paths": [
+      "/opt/homebrew/bin",
+      "/usr/local/bin",
+      "/Library/TeX/texbin"
+    ],
+    "timeout_seconds": 60
+  },
+  "profile": {
+    "target_direction": "Replace with local target roles and role families"
+  },
+  "hermes": {
+    "api_base": "http://127.0.0.1:8642/v1",
+    "model": "jobapps",
+    "session_key": "jobapps",
+    "recommended_profile": "jobapps",
+    "slash_timeout_seconds": 45
+  },
+  "discovery": {
+    "enabled": true,
+    "hydrators": ["greenhouse", "lever", "ashby"],
+    "exa": {
+      "api_key_env": "EXA_API_KEY",
+      "base_url": "https://api.exa.ai",
+      "type": "auto",
+      "default_num_results": 8,
+      "include_domains": [
+        "boards.greenhouse.io",
+        "job-boards.greenhouse.io",
+        "jobs.lever.co",
+        "jobs.ashbyhq.com"
+      ]
+    },
+    "query_presets": []
+  },
+  "networking": {
+    "enabled": true,
+    "exa": {
+      "api_key_env": "EXA_API_KEY",
+      "base_url": "https://api.exa.ai",
+      "type": "auto",
+      "category": "people",
+      "default_num_results": 6
+    },
+    "websets": {
+      "enabled": true,
+      "api_key_env": "EXA_API_KEY",
+      "base_url": "https://api.exa.ai/websets/v0",
+      "default_num_results": 3,
+      "max_wait_seconds": 45,
+      "poll_seconds": 3
+    },
+    "gog_path": "gog",
+    "gog_timeout_seconds": 30
+  },
+  "rules": {
+    "require_sponsorship_filter": true,
+    "never_auto_submit": true,
+    "require_approval_for": [
+      "application_submit",
+      "email_send",
+      "linkedin_message_send",
+      "external_record_update"
+    ]
+  },
+  "role_families": [
+    "ai_agent_systems",
+    "backend",
+    "full_stack",
+    "data_engineering",
+    "data_analytics",
+    "ml_ds",
+    "mobile_ios",
+    "devops_it",
+    "research",
+    "other"
+  ],
+  "scoring": {
+    "default_thresholds": {
+      "apply": 4.0,
+      "skip": 0.0
+    },
+    "dimensions": {
+      "sponsorship": 0.3,
+      "role_fit": 0.25,
+      "proof_strength": 0.2,
+      "career_direction": 0.15,
+      "effort_vs_value": 0.1
+    }
+  },
+  "writing": {
+    "voice": "direct, specific, thoughtful, non-corporate",
+    "cover_letter_words": [350, 400],
+    "no_generic_enthusiasm": true,
+    "no_padding_metrics": true,
+    "resume_format": "tex",
+    "cover_letter_format": "tex"
+  },
+  "followups": {
+    "networking_after_days": 5,
+    "application_check_after_days": 10
+  },
+  "criteria": {
+    "blockers": [
+      {
+        "area": "sponsorship",
+        "type": "pattern",
+        "patterns": [
+          "no visa sponsorship",
+          "not sponsor",
+          "unable to sponsor",
+          "cannot sponsor",
+          "must be a u.s. citizen",
+          "must be authorized to work without sponsorship",
+          "green card required"
+        ],
+        "severity": "blocker",
+        "action": "skip unless user explicitly overrides work-authorization risk"
+      },
+      {
+        "area": "sponsorship",
+        "type": "pattern",
+        "patterns": [
+          "visa sponsorship available",
+          "will sponsor",
+          "sponsorship available",
+          "open to sponsorship"
+        ],
+        "severity": "clear",
+        "action": "proceed"
+      },
+      {
+        "area": "seniority",
+        "type": "title",
+        "patterns": ["staff engineer", "principal engineer", "director"],
+        "severity": "blocker",
+        "action": "skip unless user explicitly wants a reach application"
+      },
+      {
+        "area": "seniority",
+        "type": "years",
+        "threshold": 5,
+        "severity": "blocker",
+        "action": "skip unless user explicitly wants a reach application"
+      },
+      {
+        "area": "location",
+        "type": "pattern",
+        "patterns": ["remote", "hybrid", "new york", "new jersey", "nyc"],
+        "severity": "clear",
+        "action": "proceed"
+      },
+      {
+        "area": "location",
+        "type": "pattern",
+        "patterns": ["onsite", "relocation required", "must relocate"],
+        "severity": "flag",
+        "action": "review location constraints before applying"
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+name: jobapps
+version: 0.1.0
+description: Exposes Hermes JobApps database tools, context injection, and workflow skill to native Hermes sessions.
+author: JobApps maintainers
+kind: standalone
+provides_tools:
+  - jobapps_read_context
+  - jobapps_database_health
+  - jobapps_brain_context
+  - jobapps_search_brain
+  - jobapps_upsert_brain_entity
+  - jobapps_record_brain_event
+  - jobapps_upsert_profile_fact
+  - jobapps_upsert_proof_point
+  - jobapps_search_evidence
+  - jobapps_retrieve_for_job
+  - jobapps_discovery_status
+  - jobapps_discover_jobs
+  - jobapps_hydrate_job_url
+  - jobapps_prepare_discovered_job
+  - jobapps_networking_status
+  - jobapps_find_people
+  - jobapps_create_gmail_draft
+  - jobapps_record_application_signal
+  - jobapps_record_tailoring_requirement
+  - jobapps_record_portrayal_decision
+  - jobapps_update_proof_lifecycle
+  - jobapps_evaluate_job
+  - jobapps_prepare_opportunity
+  - jobapps_draft_materials
+  - jobapps_record_job
+  - jobapps_save_material
+  - jobapps_create_resume_tex
+  - jobapps_create_cover_letter_tex
+  - jobapps_patch_material
+  - jobapps_diff_material
+  - jobapps_compile_material_pdf
+  - jobapps_mark_material_ready_for_review
+  - jobapps_save_prompt
+  - jobapps_record_research_note
+  - jobapps_record_application_change
+  - jobapps_record_learning_pattern
+  - jobapps_create_progress_item
+  - jobapps_create_followup
+  - jobapps_update_status
+  - jobapps_request_approval
+  - jobapps_update_approval
+provides_hooks:
+  - pre_llm_call
+provides_skills:
+  - jobapps-cockpit

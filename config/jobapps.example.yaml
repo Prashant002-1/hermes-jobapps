@@ -1,0 +1,113 @@
+# Hermes JobApps configuration seed.
+# Runtime profile/application data lives in SQLite, not in this file.
+
+database_path: data/hermes-jobapps.sqlite3
+materials_path: data/materials
+
+profile:
+  primary_email_env: HERMES_PROFILE_EMAIL
+  target_direction: Replace with your local target roles and role families
+  # Optional private imports can seed the database, but they are not a schema
+  # or source of truth. Keep them outside git.
+  private_seed_example: private/profile-seed.html
+
+hermes:
+  api_base: http://127.0.0.1:8642/v1
+  model: hermes-agent
+  session_key: jobapps
+  recommended_profile: jobapps
+  env:
+    api_key: HERMES_API_KEY
+    jobapps_db: HERMES_JOBAPPS_DB
+
+discovery:
+  enabled: true
+  hydrators: [greenhouse, lever, ashby]
+  exa:
+    api_key_env: EXA_API_KEY
+    base_url: https://api.exa.ai
+    type: auto
+    default_num_results: 8
+    include_domains:
+      - boards.greenhouse.io
+      - job-boards.greenhouse.io
+      - jobs.lever.co
+      - jobs.ashbyhq.com
+  query_presets: []
+
+networking:
+  enabled: true
+  exa:
+    api_key_env: EXA_API_KEY
+    base_url: https://api.exa.ai
+    type: auto
+    category: people
+    default_num_results: 6
+  gog_path: gog
+  gog_timeout_seconds: 30
+
+rules:
+  require_sponsorship_filter: true
+  never_auto_submit: true
+  require_approval_for:
+    - application_submit
+    - email_send
+    - linkedin_message_send
+    - external_record_update
+  banned_punctuation:
+    cover_letters:
+      - em_dash
+
+role_families:
+  - ai_agent_systems
+  - backend
+  - full_stack
+  - data_engineering
+  - data_analytics
+  - ml_ds
+  - mobile_ios
+  - devops_it
+  - research
+  - other
+
+scoring:
+  default_thresholds:
+    apply: 4.0
+    maybe: 3.2
+    skip: 0.0
+  dimensions:
+    sponsorship:
+      weight: 0.30
+      blocker_if: explicit_no_sponsorship
+    role_fit:
+      weight: 0.25
+    proof_strength:
+      weight: 0.20
+    career_direction:
+      weight: 0.15
+    effort_vs_value:
+      weight: 0.10
+
+sources:
+  manual_first: true
+  future:
+    - company_career_pages
+    - greenhouse
+    - lever
+    - ashby
+    - remotive
+    - arbeitnow
+    - hacker_news
+
+writing:
+  voice: direct, specific, thoughtful, non-corporate
+  cover_letter_words: [350, 400]
+  resume_format: tex
+  cover_letter_format: tex
+  no_generic_enthusiasm: true
+  no_resume_regurgitation: true
+  no_padding_metrics: true
+
+followups:
+  networking_after_days: 5
+  application_check_after_days: 10

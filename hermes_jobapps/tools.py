@@ -1,0 +1,1311 @@
+"""Tool handlers for JobApps database transitions.
+
+These handlers are used by the local app and by the Hermes plugin wrapper.
+Hermes-facing tool names use underscores because model tool schemas generally
+expect simple function identifiers.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Callable
+
+from .config import resolve_project_path
+from .discovery import DiscoveryService
+from .evaluator import evaluate_job
+from .latex import compile_tex_to_pdf, job_material_filename, write_material_artifact
+from .materials import (
+    build_full_cover_letter_tex,
+    build_full_resume_tex,
+    patch_text,
+    text_diff,
+)
+from .networking import NetworkingService
+from .repository import JobRepository
+from .writers import draft_materials
+
+
+TOOL_SPECS: list[dict[str, Any]] = [
+    {
+        "name": "jobapps_read_context",
+        "description": "Read JobApps profile facts, proof points, recent applications, progress, follow-ups, approvals, and health.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "writes": False,
+    },
+    {
+        "name": "jobapps_database_health",
+        "description": "Inspect JobApps database counts and stale or unattached records before real workflow use.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "writes": False,
+    },
+    {
+        "name": "jobapps_brain_context",
+        "description": "Read the compact JobApps career brain: personal/job-search memory counts, recent events, and optional search results.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        },
+        "writes": False,
+    },
+    {
+        "name": "jobapps_search_brain",
+        "description": "Search the JobApps career brain for remembered conversations, decisions, people, companies, constraints, preferences, proof points, projects, and job-search patterns.",
+        "input_schema": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string"},
+                "entity_type": {"type": "string"},
+                "event_type": {"type": "string"},
+                "job_id": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        },
+        "writes": False,
+    },
+    {
+        "name": "jobapps_upsert_brain_entity",
+        "description": "Create or update a canonical personal brain entity such as a person, company, project, constraint, decision theme, proof point, or preference.",
+        "input_schema": {
+            "type": "object",
+            "required": ["entity_type", "title"],
+            "properties": {
+                "entity_type": {"type": "string"},
+                "title": {"type": "string"},
+                "slug": {"type": "string"},
+                "summary": {"type": "string"},
+                "status": {"type": "string"},
+                "privacy": {"type": "string"},
+                "source": {"type": "string"},
+                "confidence": {"type": "number"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_record_brain_event",
+        "description": "Record a sourced career-brain event for a conversation, correction, decision, revision, preference, person, company, project, networking move, daily note, or application step.",
+        "input_schema": {
+            "type": "object",
+            "required": ["event_type", "title", "content"],
+            "properties": {
+                "event_type": {"type": "string"},
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "entity_type": {"type": "string"},
+                "entity_name": {"type": "string"},
+                "entity_slug": {"type": "string"},
+                "entity_id": {"type": "string"},
+                "job_id": {"type": "string"},
+                "source": {"type": "string"},
+                "evidence_text": {"type": "string"},
+                "confidence": {"type": "number"},
+                "importance": {"type": "number"},
+                "occurred_at": {"type": "string"},
+                "hermes_session_id": {"type": "string"},
+                "hermes_run_id": {"type": "string"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_upsert_profile_fact",
+        "description": "Create or update one durable profile fact in the JobApps database.",
+        "input_schema": {
+            "type": "object",
+            "required": ["fact_key", "value"],
+            "properties": {
+                "fact_key": {"type": "string"},
+                "value": {"type": "string"},
+                "category": {"type": "string"},
+                "source": {"type": "string"},
+                "confidence": {"type": "number"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_upsert_proof_point",
+        "description": "Create or update a truthful experience proof point used for matching jobs.",
+        "input_schema": {
+            "type": "object",
+            "required": ["label", "summary", "evidence"],
+            "properties": {
+                "id": {"type": "string"},
+                "label": {"type": "string"},
+                "summary": {"type": "string"},
+                "evidence": {"type": "string"},
+                "role_family": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string"}},
+                "source": {"type": "string"},
+                "confidence": {"type": "number"},
+                "status": {"type": "string"},
+                "user_confirmed": {"type": "boolean"},
+                "narrative_version": {"type": "string"},
+                "allowed_uses": {"type": "array", "items": {"type": "string"}},
+                "risk_level": {"type": "string"},
+                "valid_from": {"type": "string"},
+                "valid_to": {"type": "string"},
+                "superseded_by": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_search_evidence",
+        "description": "Search app-owned evidence with lifecycle filters before ranking. Defaults to active, user-confirmed proof usable for the requested material.",
+        "input_schema": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string"},
+                "role_family": {"type": "string"},
+                "use": {"type": "string"},
+                "limit": {"type": "integer"},
+                "include_inactive": {"type": "boolean"},
+            },
+        },
+        "writes": False,
+    },
+    {
+        "name": "jobapps_retrieve_for_job",
+        "description": "Retrieve eligible current evidence for a stored job and report excluded stale, retired, superseded, or unconfirmed evidence.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "use": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_discovery_status",
+        "description": "Inspect the removable discovery layer: Exa key readiness, official ATS hydrators, and candidate counts.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "writes": False,
+    },
+    {
+        "name": "jobapps_discover_jobs",
+        "description": "Search for current candidate jobs through configured discovery providers. Exa uses EXA_API_KEY and stores candidates, but never applies.",
+        "input_schema": {
+            "type": "object",
+            "required": ["query"],
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+                "hydrate": {"type": "boolean"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_hydrate_job_url",
+        "description": "Hydrate one job URL through official ATS surfaces when available and store it as a discovery candidate.",
+        "input_schema": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {"url": {"type": "string"}},
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_prepare_discovered_job",
+        "description": "Promote a stored discovery candidate into the normal JobApps opportunity workflow for blocker preflight, materials, and tracking.",
+        "input_schema": {
+            "type": "object",
+            "required": ["candidate_id"],
+            "properties": {"candidate_id": {"type": "string"}},
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_networking_status",
+        "description": "Inspect networking operator readiness: Exa people search and draft-only Gmail via gog.",
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "writes": False,
+    },
+    {
+        "name": "jobapps_find_people",
+        "description": "Search public people profiles with cheap Exa Search by default and cache contacts. Use Websets only as an explicit/missing-email fallback. This never contacts anyone or guesses private emails.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "company": {"type": "string"},
+                "job_id": {"type": "string"},
+                "limit": {"type": "integer"},
+                "provider": {"type": "string", "description": "search (default), auto (search then Websets if no verified email), or websets (expensive explicit enrichment)."},
+                "use_websets_fallback": {"type": "boolean", "description": "Run expensive Websets contact enrichment only if normal search finds no verified email."},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_create_gmail_draft",
+        "description": "Create a Gmail draft through gog with --gmail-no-send. This tool cannot send email and only auto-fills a contact recipient when email_status is found.",
+        "input_schema": {
+            "type": "object",
+            "required": ["subject", "body"],
+            "properties": {
+                "subject": {"type": "string"},
+                "body": {"type": "string"},
+                "job_id": {"type": "string"},
+                "contact_id": {"type": "string"},
+                "to_email": {"type": "string"},
+                "account": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_record_application_signal",
+        "description": "Record one reusable signal extracted from a job description or application event.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id", "signal_type", "label", "value"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "signal_type": {"type": "string"},
+                "label": {"type": "string"},
+                "value": {"type": "string"},
+                "evidence_text": {"type": "string"},
+                "source": {"type": "string"},
+                "confidence": {"type": "number"},
+                "actionability": {"type": "string"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_record_tailoring_requirement",
+        "description": "Persist one JD-grounded tailoring requirement that generated materials must address.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id", "requirement"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "requirement": {"type": "string"},
+                "source_text": {"type": "string"},
+                "category": {"type": "string"},
+                "priority": {"type": "number"},
+                "status": {"type": "string"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_record_portrayal_decision",
+        "description": "Persist how a JD requirement changed material framing, with requirement/material/proof provenance.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id", "target", "after_text", "rationale"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "requirement_id": {"type": "string"},
+                "material_id": {"type": "string"},
+                "proof_id": {"type": "string"},
+                "decision_type": {"type": "string"},
+                "target": {"type": "string"},
+                "before_text": {"type": "string"},
+                "after_text": {"type": "string"},
+                "rationale": {"type": "string"},
+                "source": {"type": "string"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_update_proof_lifecycle",
+        "description": "Change whether a proof point can be used: active, candidate, needs_review, superseded, retired, forbidden, or archived.",
+        "input_schema": {
+            "type": "object",
+            "required": ["proof_id"],
+            "properties": {
+                "proof_id": {"type": "string"},
+                "status": {"type": "string"},
+                "user_confirmed": {"type": "boolean"},
+                "narrative_version": {"type": "string"},
+                "allowed_uses": {"type": "array", "items": {"type": "string"}},
+                "risk_level": {"type": "string"},
+                "valid_from": {"type": "string"},
+                "valid_to": {"type": "string"},
+                "superseded_by": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_evaluate_job",
+        "description": "Create a structured local evaluation from a job and current JobApps database context.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job"],
+            "properties": {"job": {"type": "object"}, "context": {"type": "object"}},
+        },
+        "writes": False,
+    },
+    {
+        "name": "jobapps_prepare_opportunity",
+        "description": "Parse a pasted opportunity or structured job payload, evaluate it, persist it, generate reviewable materials, progress, follow-up, and approval state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "message": {"type": "string"},
+                "job": {"type": "object"},
+                "title": {"type": "string"},
+                "company": {"type": "string"},
+                "location": {"type": "string"},
+                "url": {"type": "string"},
+                "description": {"type": "string"},
+                "user_notes": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_draft_materials",
+        "description": "Draft resume notes, cover letter text, short answers, and outreach from an evaluation.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job", "evaluation"],
+            "properties": {"job": {"type": "object"}, "evaluation": {"type": "object"}, "context": {"type": "object"}},
+        },
+        "writes": False,
+    },
+    {
+        "name": "jobapps_record_job",
+        "description": "Persist a job and its evaluation in the JobApps database.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job", "evaluation"],
+            "properties": {"job": {"type": "object"}, "evaluation": {"type": "object"}},
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_save_material",
+        "description": "Persist a generated material artifact for a job, including LaTeX files.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id", "kind", "content"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "kind": {"type": "string"},
+                "content": {},
+                "rationale": {"type": "string"},
+                "format": {"type": "string"},
+                "file_path": {"type": "string"},
+                "source": {"type": "string"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_create_resume_tex",
+        "description": "Create a full app-owned resume.tex artifact from explicit, user-confirmed sections.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "name": {"type": "string"},
+                "headline": {"type": "string"},
+                "sections": {"type": "array", "items": {"type": "object"}},
+                "rationale": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_create_cover_letter_tex",
+        "description": "Create a full app-owned cover_letter.tex artifact from explicit cover-letter body text.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id", "body"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "body": {"type": "string"},
+                "company": {"type": "string"},
+                "role_title": {"type": "string"},
+                "name": {"type": "string"},
+                "rationale": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_patch_material",
+        "description": "Patch an existing material by exact text replacement, update its file, record a revision diff, and record provenance.",
+        "input_schema": {
+            "type": "object",
+            "required": ["material_id", "old_string", "new_string", "reason"],
+            "properties": {
+                "material_id": {"type": "string"},
+                "old_string": {"type": "string"},
+                "new_string": {"type": "string"},
+                "replace_all": {"type": "boolean"},
+                "reason": {"type": "string"},
+                "requirement": {"type": "string"},
+                "proof_id": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_diff_material",
+        "description": "Preview a unified diff for a material without saving changes.",
+        "input_schema": {
+            "type": "object",
+            "required": ["material_id"],
+            "properties": {
+                "material_id": {"type": "string"},
+                "proposed_content": {"type": "string"},
+                "old_string": {"type": "string"},
+                "new_string": {"type": "string"},
+                "replace_all": {"type": "boolean"},
+            },
+        },
+        "writes": False,
+    },
+    {
+        "name": "jobapps_compile_material_pdf",
+        "description": "Compile a TeX material to PDF when a compiler exists. Reports missing compiler without installing anything.",
+        "input_schema": {
+            "type": "object",
+            "required": ["material_id"],
+            "properties": {"material_id": {"type": "string"}},
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_mark_material_ready_for_review",
+        "description": "Mark one or more materials ready for human review and create an approval gate.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "material_ids": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_save_prompt",
+        "description": "Save a prompt build so Hermes and the app can reproduce a workflow run.",
+        "input_schema": {
+            "type": "object",
+            "required": ["prompt_type", "prompt"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "prompt_type": {"type": "string"},
+                "prompt": {"type": "string"},
+                "context_snapshot": {"type": "object"},
+                "status": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_record_research_note",
+        "description": "Record company, job, sponsorship, or networking research with source and confidence.",
+        "input_schema": {
+            "type": "object",
+            "required": ["subject", "summary"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "subject": {"type": "string"},
+                "source_url": {"type": "string"},
+                "summary": {"type": "string"},
+                "confidence": {"type": "number"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_record_application_change",
+        "description": "Record why a resume, cover letter, or answer changed for a role.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id", "change_type", "target", "after_text", "reason"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "material_id": {"type": "string"},
+                "change_type": {"type": "string"},
+                "target": {"type": "string"},
+                "before_text": {"type": "string"},
+                "after_text": {"type": "string"},
+                "reason": {"type": "string"},
+                "requirement": {"type": "string"},
+                "proof_id": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_record_learning_pattern",
+        "description": "Persist a reusable user correction or portrayal preference so future job materials follow it.",
+        "input_schema": {
+            "type": "object",
+            "required": ["pattern_type", "trigger", "preference"],
+            "properties": {
+                "pattern_type": {"type": "string"},
+                "trigger": {"type": "string"},
+                "preference": {"type": "string"},
+                "source": {"type": "string"},
+                "confidence": {"type": "number"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_create_progress_item",
+        "description": "Create a progress item for application, research, material review, or networking work.",
+        "input_schema": {
+            "type": "object",
+            "required": ["title"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "title": {"type": "string"},
+                "kind": {"type": "string"},
+                "status": {"type": "string"},
+                "due_date": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_create_followup",
+        "description": "Create a follow-up reminder tied to a job or contact.",
+        "input_schema": {
+            "type": "object",
+            "required": ["due_date", "reason"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "contact_id": {"type": "string"},
+                "due_date": {"type": "string"},
+                "reason": {"type": "string"},
+                "status": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_update_status",
+        "description": "Record an application status transition.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id", "status"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "status": {"type": "string"},
+                "note": {"type": "string"},
+                "hermes_run_id": {"type": "string"},
+                "hermes_session_id": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_request_approval",
+        "description": "Create a pending human approval gate for material review or an external action.",
+        "input_schema": {
+            "type": "object",
+            "required": ["action"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "action": {"type": "string"},
+                "status": {"type": "string"},
+                "payload": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_update_approval",
+        "description": "Update a human approval gate after explicit user review.",
+        "input_schema": {
+            "type": "object",
+            "required": ["approval_id", "status"],
+            "properties": {
+                "approval_id": {"type": "string"},
+                "status": {"type": "string"},
+                "payload": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+]
+
+
+class AgentToolbox:
+    def __init__(self, repo: JobRepository, config: dict[str, Any]) -> None:
+        self.repo = repo
+        self.config = config
+        self._handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+            "jobapps_read_context": self._read_context,
+            "jobapps_database_health": self._database_health,
+            "jobapps_brain_context": self._brain_context,
+            "jobapps_search_brain": self._search_brain,
+            "jobapps_upsert_brain_entity": self._upsert_brain_entity,
+            "jobapps_record_brain_event": self._record_brain_event,
+            "jobapps_upsert_profile_fact": self._upsert_profile_fact,
+            "jobapps_upsert_proof_point": self._upsert_proof_point,
+            "jobapps_search_evidence": self._search_evidence,
+            "jobapps_retrieve_for_job": self._retrieve_for_job,
+            "jobapps_discovery_status": self._discovery_status,
+            "jobapps_discover_jobs": self._discover_jobs,
+            "jobapps_hydrate_job_url": self._hydrate_job_url,
+            "jobapps_prepare_discovered_job": self._prepare_discovered_job,
+            "jobapps_networking_status": self._networking_status,
+            "jobapps_find_people": self._find_people,
+            "jobapps_create_gmail_draft": self._create_gmail_draft,
+            "jobapps_record_application_signal": self._record_application_signal,
+            "jobapps_record_tailoring_requirement": self._record_tailoring_requirement,
+            "jobapps_record_portrayal_decision": self._record_portrayal_decision,
+            "jobapps_update_proof_lifecycle": self._update_proof_lifecycle,
+            "jobapps_evaluate_job": self._evaluate_job,
+            "jobapps_prepare_opportunity": self._prepare_opportunity,
+            "jobapps_draft_materials": self._draft_materials,
+            "jobapps_record_job": self._record_job,
+            "jobapps_save_material": self._save_material,
+            "jobapps_create_resume_tex": self._create_resume_tex,
+            "jobapps_create_cover_letter_tex": self._create_cover_letter_tex,
+            "jobapps_patch_material": self._patch_material,
+            "jobapps_diff_material": self._diff_material,
+            "jobapps_compile_material_pdf": self._compile_material_pdf,
+            "jobapps_mark_material_ready_for_review": self._mark_material_ready_for_review,
+            "jobapps_save_prompt": self._save_prompt,
+            "jobapps_record_research_note": self._record_research_note,
+            "jobapps_record_application_change": self._record_application_change,
+            "jobapps_record_learning_pattern": self._record_learning_pattern,
+            "jobapps_create_progress_item": self._create_progress_item,
+            "jobapps_create_followup": self._create_followup,
+            "jobapps_update_status": self._update_status,
+            "jobapps_request_approval": self._request_approval,
+            "jobapps_update_approval": self._update_approval,
+        }
+
+    def specs(self) -> list[dict[str, Any]]:
+        return TOOL_SPECS
+
+    def execute(self, name: str, payload: dict[str, Any], run_id: str | None = None) -> dict[str, Any]:
+        if name not in self._handlers:
+            raise KeyError(f"Unknown tool: {name}")
+        try:
+            output = self._handlers[name](payload)
+            status = "completed"
+        except Exception as exc:
+            output = {"error": str(exc)}
+            status = "failed"
+            self.repo.record_tool_call(name, payload, output, status=status, run_id=run_id)
+            raise
+        self.repo.record_tool_call(name, payload, output, status=status, run_id=run_id)
+        return output
+
+    def _read_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.dashboard() | {"career_context": self.repo.career_context()}
+
+    def _database_health(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.database_health()
+
+    def _brain_context(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.brain_context(
+            query=payload.get("query", ""),
+            limit=parse_limit(payload.get("limit", 12), default=12, maximum=80),
+        )
+
+    def _search_brain(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.search_brain(
+            payload["query"],
+            entity_type=payload.get("entity_type"),
+            event_type=payload.get("event_type"),
+            job_id=payload.get("job_id"),
+            limit=parse_limit(payload.get("limit", 12), default=12, maximum=80),
+        )
+
+    def _upsert_brain_entity(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.upsert_brain_entity(
+            payload["entity_type"],
+            payload["title"],
+            slug=payload.get("slug", ""),
+            summary=payload.get("summary", ""),
+            status=payload.get("status", "active"),
+            privacy=payload.get("privacy", "private"),
+            source=payload.get("source", "agent"),
+            confidence=float(payload.get("confidence", 0.8)),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _record_brain_event(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.record_brain_event(
+            payload["event_type"],
+            payload["title"],
+            payload["content"],
+            entity_type=payload.get("entity_type", "job_search"),
+            entity_name=payload.get("entity_name", ""),
+            entity_slug=payload.get("entity_slug", ""),
+            entity_id=payload.get("entity_id"),
+            job_id=payload.get("job_id"),
+            source=payload.get("source", "agent"),
+            evidence_text=payload.get("evidence_text", ""),
+            confidence=float(payload.get("confidence", 0.8)),
+            importance=float(payload.get("importance", 0.5)),
+            occurred_at=payload.get("occurred_at"),
+            hermes_session_id=payload.get("hermes_session_id"),
+            hermes_run_id=payload.get("hermes_run_id"),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _upsert_profile_fact(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.upsert_profile_fact(
+            payload["fact_key"],
+            payload["value"],
+            payload.get("category", "profile"),
+            payload.get("source", "agent"),
+            float(payload.get("confidence", 1.0)),
+        )
+
+    def _upsert_proof_point(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.upsert_proof_point(
+            label=payload["label"],
+            summary=payload["summary"],
+            evidence=payload["evidence"],
+            role_family=payload.get("role_family", "other"),
+            tags=payload.get("tags", []),
+            source=payload.get("source", "agent"),
+            confidence=float(payload.get("confidence", 1.0)),
+            proof_id=payload.get("id"),
+            status=payload.get("status", "active"),
+            user_confirmed=parse_bool(payload.get("user_confirmed", True), "user_confirmed", default=True),
+            narrative_version=payload.get("narrative_version", "current"),
+            allowed_uses=payload.get("allowed_uses"),
+            risk_level=payload.get("risk_level", "safe"),
+            valid_from=payload.get("valid_from"),
+            valid_to=payload.get("valid_to"),
+            superseded_by=payload.get("superseded_by"),
+        )
+
+    def _search_evidence(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.search_evidence(
+            payload["query"],
+            role_family=payload.get("role_family"),
+            use=payload.get("use", "resume"),
+            limit=parse_limit(payload.get("limit", 8), default=8),
+            include_inactive=parse_bool(payload.get("include_inactive", False), "include_inactive", default=False),
+        )
+
+    def _retrieve_for_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.retrieve_for_job(
+            payload["job_id"],
+            use=payload.get("use", "resume"),
+            limit=parse_limit(payload.get("limit", 8), default=8),
+        )
+
+    def _discovery_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return DiscoveryService(self.repo, self.config).status()
+
+    def _discover_jobs(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return DiscoveryService(self.repo, self.config).search_exa(
+            payload["query"],
+            limit=parse_limit(payload.get("limit", 8), default=8, maximum=25),
+            hydrate=parse_bool(payload.get("hydrate", True), "hydrate", default=True),
+        )
+
+    def _hydrate_job_url(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return DiscoveryService(self.repo, self.config).hydrate_url(payload["url"])
+
+    def _prepare_discovered_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from .workflow import JobAppsWorkflow
+
+        service = DiscoveryService(self.repo, self.config)
+        workflow = JobAppsWorkflow(self.repo, self)
+        return service.prepare_candidate(payload["candidate_id"], workflow.prepare_opportunity)
+
+    def _networking_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return NetworkingService(self.repo, self.config).status()
+
+    def _find_people(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return NetworkingService(self.repo, self.config).search_people(
+            query=payload.get("query", ""),
+            company=payload.get("company", ""),
+            job_id=payload.get("job_id", ""),
+            limit=parse_limit(payload.get("limit", 6), default=6, maximum=15),
+            provider=payload.get("provider", ""),
+            use_websets_fallback=parse_bool(payload.get("use_websets_fallback"), "use_websets_fallback", default=False),
+        )
+
+    def _create_gmail_draft(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return NetworkingService(self.repo, self.config).create_gmail_draft(
+            subject=payload["subject"],
+            body=payload["body"],
+            job_id=payload.get("job_id", ""),
+            contact_id=payload.get("contact_id", ""),
+            to_email=payload.get("to_email", ""),
+            account=payload.get("account", ""),
+        )
+
+    def _record_application_signal(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.record_application_signal(
+            payload["job_id"],
+            payload["signal_type"],
+            payload["label"],
+            payload["value"],
+            evidence_text=payload.get("evidence_text", ""),
+            source=payload.get("source", "agent"),
+            confidence=float(payload.get("confidence", 0.7)),
+            actionability=payload.get("actionability", "medium"),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _record_tailoring_requirement(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.record_tailoring_requirement(
+            payload["job_id"],
+            payload["requirement"],
+            source_text=payload.get("source_text", ""),
+            category=payload.get("category", "general"),
+            priority=float(payload.get("priority", 0.5)),
+            status=payload.get("status", "targeted"),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _record_portrayal_decision(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.record_portrayal_decision(
+            payload["job_id"],
+            payload["target"],
+            payload["after_text"],
+            payload["rationale"],
+            requirement_id=payload.get("requirement_id"),
+            material_id=payload.get("material_id"),
+            proof_id=payload.get("proof_id"),
+            before_text=payload.get("before_text", ""),
+            decision_type=payload.get("decision_type", "resume_tailoring"),
+            source=payload.get("source", "agent"),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _update_proof_lifecycle(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.update_proof_point_lifecycle(
+            payload["proof_id"],
+            status=payload.get("status"),
+            user_confirmed=parse_optional_bool(payload, "user_confirmed"),
+            narrative_version=payload.get("narrative_version"),
+            allowed_uses=payload.get("allowed_uses"),
+            risk_level=payload.get("risk_level"),
+            valid_from=payload.get("valid_from"),
+            valid_to=payload.get("valid_to"),
+            superseded_by=payload.get("superseded_by"),
+            reason=payload.get("reason", ""),
+        )
+
+    def _evaluate_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        context = payload.get("context") or self.repo.career_context()
+        return evaluate_job(payload["job"], context, self.config)
+
+    def _prepare_opportunity(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from .chat import parse_job_from_message
+        from .workflow import JobAppsWorkflow
+
+        if isinstance(payload.get("job"), dict):
+            job = dict(payload["job"])
+        elif payload.get("text") or payload.get("message"):
+            job = parse_job_from_message(str(payload.get("text") or payload.get("message") or ""))
+        else:
+            job = {
+                "title": payload.get("title", ""),
+                "company": payload.get("company", ""),
+                "location": payload.get("location", ""),
+                "url": payload.get("url", ""),
+                "description": payload.get("description", ""),
+                "user_notes": payload.get("user_notes", ""),
+            }
+        workflow = JobAppsWorkflow(self.repo, self)
+        return workflow.prepare_opportunity(job)
+
+    def _draft_materials(self, payload: dict[str, Any]) -> dict[str, Any]:
+        context = payload.get("context") or self.repo.career_context()
+        return draft_materials(payload["job"], payload["evaluation"], context, self.config)
+
+    def _record_job(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.create_job(payload["job"], payload["evaluation"])
+
+    def _save_material(self, payload: dict[str, Any]) -> dict[str, Any]:
+        content = payload["content"]
+        material_format = normalize_material_format(payload.get("format", "text"))
+        file_path = payload.get("file_path", "")
+        if file_path:
+            file_path = str(_validate_material_path(self.config, file_path))
+        if material_format == "tex" and not file_path:
+            job = self.repo.get_job(payload["job_id"])["job"]
+            filename = job_material_filename(job, payload["kind"], "tex")
+            root = self.config.get("materials_path", "data/materials")
+            file_path = write_material_artifact(payload["job_id"], filename, str(content), root=root)
+        return self.repo.save_material(
+            payload["job_id"],
+            payload["kind"],
+            content,
+            payload.get("rationale", ""),
+            format=material_format,
+            file_path=file_path,
+            source=payload.get("source", "agent"),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _create_resume_tex(self, payload: dict[str, Any]) -> dict[str, Any]:
+        job = self.repo.get_job(payload["job_id"])["job"]
+        context = self.repo.career_context()
+        name = payload.get("name") or _profile_value(context, "name", "Applicant Name")
+        headline = payload.get("headline") or f"Software engineer focused on practical systems for {job.get('title') or 'target roles'}"
+        tex = build_full_resume_tex(name=name, headline=headline, sections=payload.get("sections") or [])
+        filename = job_material_filename(job, "resume", "tex")
+        file_path = write_material_artifact(payload["job_id"], filename, tex, root=self.config.get("materials_path", "data/materials"))
+        return self.repo.save_material(
+            payload["job_id"],
+            "resume",
+            tex,
+            payload.get("rationale", "Full resume TeX artifact for this application."),
+            format="tex",
+            file_path=file_path,
+            source="agent",
+            metadata={
+                "artifact_role": "full_resume",
+                "provenance": {
+                    "job_title": job.get("title", ""),
+                    "company": job.get("company", ""),
+                    "fact_policy": "user_confirmed_only",
+                },
+            },
+        )
+
+    def _create_cover_letter_tex(self, payload: dict[str, Any]) -> dict[str, Any]:
+        job = self.repo.get_job(payload["job_id"])["job"]
+        context = self.repo.career_context()
+        tex = build_full_cover_letter_tex(
+            body=payload["body"],
+            company=payload.get("company") or job.get("company") or "Hiring Team",
+            role_title=payload.get("role_title") or job.get("title") or "Target Role",
+            name=payload.get("name") or _profile_value(context, "name", "Applicant Name"),
+        )
+        filename = job_material_filename(job, "cover_letter", "tex")
+        file_path = write_material_artifact(
+            payload["job_id"], filename, tex, root=self.config.get("materials_path", "data/materials")
+        )
+        return self.repo.save_material(
+            payload["job_id"],
+            "cover_letter",
+            tex,
+            payload.get("rationale", "Cover-letter TeX artifact for this application."),
+            format="tex",
+            file_path=file_path,
+            source="agent",
+            metadata={
+                "artifact_role": "cover_letter",
+                "provenance": {
+                    "job_title": job.get("title", ""),
+                    "company": job.get("company", ""),
+                    "fact_policy": "user_confirmed_only",
+                },
+            },
+        )
+
+    def _patch_material(self, payload: dict[str, Any]) -> dict[str, Any]:
+        material = self.repo.get_material(payload["material_id"])
+        proof_id = payload.get("proof_id")
+        if proof_id:
+            self.repo.validate_proof_for_use(proof_id, provenance_use_for_material(material))
+        before = str(material.get("content") or "")
+        after = patch_text(
+            before,
+            payload["old_string"],
+            payload["new_string"],
+            replace_all=parse_bool(payload.get("replace_all", False), "replace_all", default=False),
+        )
+        diff = text_diff(before, after, fromfile=f"{material['kind']}@before", tofile=f"{material['kind']}@after")
+        file_path = material.get("file_path") or ""
+        if material.get("format") == "tex":
+            if not file_path:
+                job = self.repo.get_job(material["job_id"])["job"]
+                file_path = write_material_artifact(
+                    material["job_id"],
+                    job_material_filename(job, material["kind"], "tex"),
+                    after,
+                    root=self.config.get("materials_path", "data/materials"),
+                )
+            else:
+                safe_path = _validate_material_path(self.config, file_path)
+                safe_path.parent.mkdir(parents=True, exist_ok=True)
+                safe_path.write_text(after, encoding="utf-8")
+                file_path = str(safe_path)
+        updated = self.repo.update_material(
+            material["id"],
+            content=after,
+            file_path=file_path or None,
+            metadata={"last_edit_reason": payload.get("reason", ""), "review_status": "draft"},
+        )
+        revision = self.repo.record_material_revision(
+            material["id"],
+            before_text=before,
+            after_text=after,
+            diff=diff,
+            reason=payload.get("reason", ""),
+            requirement=payload.get("requirement", ""),
+            proof_id=payload.get("proof_id"),
+        )
+        self.repo.record_application_change(
+            material["job_id"],
+            "material_patch",
+            f"{material['kind']}.{material.get('format') or 'text'}",
+            after,
+            payload.get("reason", ""),
+            material_id=material["id"],
+            before_text=before,
+            requirement=payload.get("requirement", ""),
+            proof_id=payload.get("proof_id"),
+        )
+        return {"material": updated, "revision": revision, "diff": diff}
+
+    def _diff_material(self, payload: dict[str, Any]) -> dict[str, Any]:
+        material = self.repo.get_material(payload["material_id"])
+        before = str(material.get("content") or "")
+        if "proposed_content" in payload:
+            after = str(payload.get("proposed_content") or "")
+        else:
+            after = patch_text(
+                before,
+                payload.get("old_string", ""),
+                payload.get("new_string", ""),
+                replace_all=parse_bool(payload.get("replace_all", False), "replace_all", default=False),
+            )
+        return {
+            "material_id": material["id"],
+            "changed": before != after,
+            "diff": text_diff(before, after, fromfile=f"{material['kind']}@current", tofile=f"{material['kind']}@proposed"),
+        }
+
+    def _compile_material_pdf(self, payload: dict[str, Any]) -> dict[str, Any]:
+        material = self.repo.get_material(payload["material_id"])
+        if material.get("format") != "tex":
+            return {
+                "ok": False,
+                "status": "unsupported_format",
+                "material_id": material["id"],
+                "next_step": "Only TeX materials can be compiled to PDF.",
+            }
+        file_path = material.get("file_path") or ""
+        if not file_path:
+            job = self.repo.get_job(material["job_id"])["job"]
+            file_path = write_material_artifact(
+                material["job_id"],
+                job_material_filename(job, material["kind"], "tex"),
+                str(material.get("content") or ""),
+                root=self.config.get("materials_path", "data/materials"),
+            )
+            material = self.repo.update_material(material["id"], file_path=file_path)
+        file_path = str(_validate_material_path(self.config, file_path))
+        result = compile_tex_to_pdf(file_path, config=self.config)
+        updated = self.repo.update_material(
+            material["id"],
+            metadata={"compile": result, "review_status": "compiled" if result.get("ok") else "compile_blocked"},
+        )
+        result["material"] = updated
+        result["material_id"] = material["id"]
+        return result
+
+    def _mark_material_ready_for_review(self, payload: dict[str, Any]) -> dict[str, Any]:
+        job = self.repo.get_job(payload["job_id"])
+        material_ids = payload.get("material_ids") or [item["id"] for item in job.get("materials", [])]
+        job_material_ids = {item["id"] for item in job.get("materials", [])}
+        outside_job = [material_id for material_id in material_ids if material_id not in job_material_ids]
+        if outside_job:
+            raise ValueError("All material_ids must belong to the requested job.")
+        updated_materials = [
+            self.repo.update_material(material_id, metadata={"review_status": "ready_for_review"})
+            for material_id in material_ids
+        ]
+        approval = self.repo.create_approval(
+            "review_application_materials",
+            job_id=payload["job_id"],
+            payload={
+                "material_ids": material_ids,
+                "reason": payload.get("reason", "Materials ready for final human review."),
+                "approval_gate": "Do not send or submit these materials until approved.",
+            },
+        )
+        self.repo.create_progress_item(
+            "Review generated resume and cover letter",
+            job_id=payload["job_id"],
+            kind="material_review",
+            status="open",
+            notes=payload.get("reason", "Materials ready for final human review."),
+        )
+        return {"approval": approval, "materials": updated_materials}
+
+    def _save_prompt(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.save_prompt_build(
+            payload["prompt_type"],
+            payload["prompt"],
+            job_id=payload.get("job_id"),
+            context_snapshot=payload.get("context_snapshot", {}),
+            status=payload.get("status", "drafted"),
+        )
+
+    def _record_research_note(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.save_research_note(
+            payload["subject"],
+            payload["summary"],
+            job_id=payload.get("job_id"),
+            source_url=payload.get("source_url", ""),
+            confidence=float(payload.get("confidence", 0.5)),
+        )
+
+    def _record_application_change(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.record_application_change(
+            payload["job_id"],
+            payload["change_type"],
+            payload["target"],
+            payload["after_text"],
+            payload["reason"],
+            material_id=payload.get("material_id"),
+            before_text=payload.get("before_text", ""),
+            requirement=payload.get("requirement", ""),
+            proof_id=payload.get("proof_id"),
+        )
+
+    def _record_learning_pattern(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.record_learning_pattern(
+            payload["pattern_type"],
+            payload["trigger"],
+            payload["preference"],
+            source=payload.get("source", "agent"),
+            confidence=float(payload.get("confidence", 0.8)),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _create_progress_item(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.create_progress_item(
+            payload["title"],
+            job_id=payload.get("job_id"),
+            kind=payload.get("kind", "task"),
+            status=payload.get("status", "open"),
+            due_date=payload.get("due_date", ""),
+            notes=payload.get("notes", ""),
+        )
+
+    def _create_followup(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.create_followup(
+            payload["due_date"],
+            payload["reason"],
+            job_id=payload.get("job_id"),
+            contact_id=payload.get("contact_id"),
+            status=payload.get("status", "open"),
+        )
+
+    def _update_status(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.record_event(
+            payload["job_id"],
+            "status_changed",
+            {
+                "status": payload["status"],
+                "note": payload.get("note", ""),
+                "hermes_run_id": payload.get("hermes_run_id", ""),
+                "hermes_session_id": payload.get("hermes_session_id", ""),
+            },
+        )
+
+    def _request_approval(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.create_approval(
+            payload["action"],
+            job_id=payload.get("job_id"),
+            status=payload.get("status", "pending"),
+            payload=payload.get("payload", {}),
+        )
+
+    def _update_approval(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.repo.update_approval(
+            payload["approval_id"],
+            payload["status"],
+            payload=payload.get("payload", {}),
+        )
+
+
+def normalize_material_format(value: Any) -> str:
+    material_format = str(value or "text").strip().lower()
+    if material_format in {"latex", "ltx"}:
+        return "tex"
+    return material_format
+
+
+def parse_bool(value: Any, name: str, *, default: bool | None = None) -> bool:
+    if value is None:
+        if default is None:
+            raise ValueError(f"{name} must be a boolean, not null.")
+        return default
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{name} must be a boolean true/false value, not {type(value).__name__}.")
+
+
+def parse_optional_bool(payload: dict[str, Any], name: str) -> bool | None:
+    if name not in payload:
+        return None
+    return parse_bool(payload.get(name), name)
+
+
+def parse_limit(value: Any, *, default: int = 8, maximum: int = 50) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(1, min(number, maximum))
+
+
+def provenance_use_for_material(material: dict[str, Any]) -> str:
+    kind = str(material.get("kind") or "").lower()
+    if "cover" in kind or "letter" in kind:
+        return "cover_letter"
+    if "outreach" in kind or "network" in kind:
+        return "outreach"
+    if "interview" in kind:
+        return "interview"
+    return "resume"
+
+
+def _profile_value(context: dict[str, Any], key: str, fallback: str) -> str:
+    for fact in context.get("profile_facts", []):
+        if fact.get("fact_key") == key and fact.get("value"):
+            return str(fact["value"])
+    return fallback
+
+
+def _validate_material_path(config: dict[str, Any], file_path: str | Path) -> Path:
+    root = resolve_project_path(config.get("materials_path", "data/materials")).expanduser()
+    root.mkdir(parents=True, exist_ok=True)
+    candidate = Path(file_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = resolve_project_path(candidate)
+    resolved_root = root.resolve(strict=False)
+    resolved_candidate = candidate.resolve(strict=False)
+    if candidate.exists() and candidate.is_symlink():
+        raise ValueError("Material file paths may not be symlinks.")
+    try:
+        resolved_candidate.relative_to(resolved_root)
+    except ValueError as exc:
+        raise ValueError("Material file path must stay inside the configured materials_path.") from exc
+    return resolved_candidate

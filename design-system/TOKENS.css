@@ -1,0 +1,206 @@
+/* ==========================================================================
+   HERMES / JOBAPPS — Design Tokens
+   Theme: "Amber Signal"
+   ========================================================================== */
+
+/* ── Font imports ─────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
+
+:root {
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     AMBER SIGNAL — Palette
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  /* Base surfaces */
+  --bg:                        #fcf9f8;
+  --bg-raised:                 #ffffff;
+  --bg-sunk:                   #f0ece8;
+  --surface:                   #f5f2f0;
+  --surface-hover:             #ede9e5;
+  --surface-active:            #e8e4e0;
+
+  /* Text — obsidian, warm */
+  --text:                      #1c1b1b;
+  --text-secondary:            #4a4745;
+  --text-tertiary:             #8a8580;
+  --text-disabled:             #b5b0ab;
+
+  /* Primary accent — Safety Orange */
+  --accent:                    #b72301;
+  --accent-dim:                rgba(183, 35, 1, 0.08);
+  --accent-glow:               rgba(183, 35, 1, 0.15);
+  --accent-container:          #d42a00;
+
+  /* Secondary accent — Warm Amber */
+  --gold:                      #c45a00;
+  --gold-dim:                  rgba(196, 90, 0, 0.08);
+  --gold-glow:                 rgba(196, 90, 0, 0.15);
+  --gold-container:            #a34a00;
+
+  /* Semantic */
+  --good:                      #1a7a3e;
+  --good-dim:                  rgba(26, 122, 62, 0.08);
+  --bad:                       #b72301;
+  --bad-dim:                   rgba(183, 35, 1, 0.08);
+  --warn:                      #c45a00;
+  --warn-dim:                  rgba(196, 90, 0, 0.08);
+
+  /* Borders and outlines */
+  --border:                    rgba(28, 27, 27, 0.10);
+  --border-hover:              rgba(28, 27, 27, 0.22);
+  --border-strong:             rgba(28, 27, 27, 0.35);
+  --border-accent:             rgba(183, 35, 1, 0.30);
+  --border-gold:               rgba(196, 90, 0, 0.30);
+
+  /* ── Typography ─────────────────────────────────────────────────────── */
+
+  --font-display:              "Space Grotesk", system-ui, -apple-system,
+                               BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-sans:                 "Space Grotesk", system-ui, -apple-system,
+                               BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono:                 "Space Grotesk", ui-monospace, monospace;
+  --font-symbols:              "Material Symbols Outlined";
+
+  --text-xs:                   10px;
+  --text-sm:                   12px;
+  --text-base:                 14px;
+  --text-md:                   16px;
+  --text-lg:                   20px;
+  --text-xl:                   24px;
+  --text-2xl:                  32px;
+
+  --leading-tight:             1.2;
+  --leading-normal:            1.5;
+  --leading-relaxed:           1.6;
+
+  --weight-normal:             400;
+  --weight-medium:             500;
+  --weight-semibold:           600;
+  --weight-bold:               700;
+
+  /* ── Space (8px base grid) ────────────────────────────────────────── */
+
+  --space-1:    4px;
+  --space-2:    8px;
+  --space-3:   12px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+  --space-16:  64px;
+
+  --header-h:  56px;
+  --nav-w:     220px;
+
+  /* ── Radii (Technical Brutalism) ────────────────────────────────────── */
+
+  --radius-sm:  0px;
+  --radius-md:  0px;
+  --radius-lg:  0px;
+  --radius-xl:  0px;
+  --radius-full: 9999px;
+
+  /* ── Motion ─────────────────────────────────────────────────────────── */
+
+  --duration-fast:    120ms;
+  --duration-normal:  200ms;
+  --duration-slow:    350ms;
+  --easing:           cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  /* ── Lamp indicators ────────────────────────────────────────────────── */
+
+  --lamp-amber: 0 0 8px 1px rgba(196, 90, 0, 0.35);
+  --lamp-teal:  0 0 12px 2px rgba(26, 122, 62, 0.25);
+
+  /* ── Shadows (disabled — hard borders preferred) ────────────────────── */
+
+  --shadow-ambient: none;
+  --shadow-card:    none;
+  --shadow-glow:    none;
+
+  /* ── Noise texture (SVG feTurbulence) ───────────────────────────────── */
+  --noise-svg: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+}
+
+/* ── Material Symbols base ────────────────────────────────────────────── */
+
+.material-symbols-outlined {
+  font-family: var(--font-symbols);
+  font-weight: normal;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; }
+[hidden] { display: none !important; }
+
+html {
+  height: 100dvh; max-height: 100dvh; overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  display: grid;
+  grid-template-rows: var(--header-h) 1fr;
+  height: 100%; min-height: 0; overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+button, input, textarea, select {
+  font: inherit; color: inherit; background: transparent;
+}
+button { cursor: pointer; border: 0; padding: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+svg:not(.material-symbols-outlined) { display: block; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 0px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* ── Animations ───────────────────────────────────────────────────────── */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-lamp {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 0.9; }
+}

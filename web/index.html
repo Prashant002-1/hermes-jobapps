@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JobApps — Hermes</title>
+  <link rel="stylesheet" href="/design-system/TOKENS.css">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'><rect x='1' y='6' width='3' height='16' rx='1.5' fill='%23c45a00'/><rect x='7' y='9' width='3' height='13' rx='1.5' fill='%23b72301'/><rect x='13' y='3' width='3' height='22' rx='1.5' fill='%23b72301'/><rect x='19' y='7' width='3' height='15' rx='1.5' fill='%23c45a00'/><rect x='25' y='10' width='3' height='13' rx='1.5' fill='%23c45a00'/></svg>">
+</head>
+<body>
+  <header class="bar" id="bar">
+    <div class="bar-left">
+      <div class="bar-logo" aria-hidden="true">
+        <svg viewBox="0 0 28 28" fill="none">
+          <rect x="1" y="6" width="3" height="16" rx="1.5"/>
+          <rect x="7" y="9" width="3" height="13" rx="1.5"/>
+          <rect x="13" y="3" width="3" height="22" rx="1.5"/>
+          <rect x="19" y="7" width="3" height="15" rx="1.5"/>
+          <rect x="25" y="10" width="3" height="13" rx="1.5"/>
+        </svg>
+      </div>
+      <div class="bar-identity">
+        <span class="bar-title">JobApps</span>
+        <span class="bar-subtitle">HERMES</span>
+      </div>
+    </div>
+    <div class="bar-center">
+      <img class="bar-brand-mark" src="/assets/hermes-jobapps-mark.svg" alt="Hermes JobApps">
+    </div>
+    <div class="bar-right">
+      <span class="bar-status" id="barStatus">connected</span>
+      <span class="bar-dot" id="barDot"></span>
+    </div>
+  </header>
+
+  <div class="app">
+    <nav class="nav-rail" id="navRail">
+      <button class="nav-item active" data-view="dashboard" title="State">
+        <span class="material-symbols-outlined nav-icon">monitoring</span>
+        <span class="nav-label">State</span>
+      </button>
+      <button class="nav-item" data-view="actions" title="Actions">
+        <span class="material-symbols-outlined nav-icon">task_alt</span>
+        <span class="nav-label">Actions</span>
+      </button>
+      <button class="nav-item" data-view="brain" title="Brain">
+        <span class="material-symbols-outlined nav-icon">psychology</span>
+        <span class="nav-label">Brain</span>
+      </button>
+      <button class="nav-item" data-view="discovery" title="Find">
+        <span class="material-symbols-outlined nav-icon">travel_explore</span>
+        <span class="nav-label">Find</span>
+      </button>
+      <button class="nav-item" data-view="jobs" title="Jobs">
+        <span class="material-symbols-outlined nav-icon">work</span>
+        <span class="nav-label">Jobs</span>
+      </button>
+      <button class="nav-item" data-view="materials" title="Materials">
+        <span class="material-symbols-outlined nav-icon">inventory_2</span>
+        <span class="nav-label">Materials</span>
+      </button>
+
+      <div class="nav-divider"></div>
+
+      <button class="nav-item" data-view="network" title="Network">
+        <span class="material-symbols-outlined nav-icon">hub</span>
+        <span class="nav-label">Network</span>
+      </button>
+      <button class="nav-item" data-view="activity" title="Events">
+        <span class="material-symbols-outlined nav-icon">timeline</span>
+        <span class="nav-label">Events</span>
+      </button>
+      <button class="nav-item" data-view="criteria" title="Rules">
+        <span class="material-symbols-outlined nav-icon">gavel</span>
+        <span class="nav-label">Rules</span>
+      </button>
+
+      <div class="nav-spacer"></div>
+
+      <button class="nav-item" data-view="sessions" title="Sessions">
+        <span class="material-symbols-outlined nav-icon">history</span>
+        <span class="nav-label">Sessions</span>
+      </button>
+      <button class="nav-item" data-view="chat" title="Chat">
+        <span class="material-symbols-outlined nav-icon">chat</span>
+        <span class="nav-label">Chat</span>
+      </button>
+    </nav>
+
+    <main class="stage" id="stage">
+      <!-- ═══════════════ Dashboard ═══════════════ -->
+      <section class="view view-dashboard active" id="view-dashboard" data-view="dashboard">
+        <header class="view-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Now</span>
+            <h1>Application State</h1>
+          </div>
+          <div class="view-header-actions">
+            <button class="btn btn-primary" type="button" data-view-jump="discovery">
+              <span class="material-symbols-outlined btn-icon">travel_explore</span>
+              Find Jobs
+            </button>
+            <button class="btn" type="button" data-view-jump="jobs">
+              <span class="material-symbols-outlined btn-icon">list</span>
+              Jobs
+            </button>
+            <button class="btn" type="button" data-view-jump="actions">
+              <span class="material-symbols-outlined btn-icon">task_alt</span>
+              Actions
+            </button>
+          </div>
+        </header>
+
+        <div class="stat-strip">
+          <div class="stat-item">
+            <span class="stat-value" id="statJobs">0</span>
+            <span class="stat-label">Jobs Tracked</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="statNeedsAction">0</span>
+            <span class="stat-label">Active Actions</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="statMaterials">0</span>
+            <span class="stat-label">Materials</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-value" id="statPeople">0</span>
+            <span class="stat-label">People</span>
+          </div>
+        </div>
+
+        <div class="state-summary-grid">
+          <section class="state-focus" id="stateFocus" aria-label="Current job state"></section>
+          <section class="state-queue" id="stateQueue" aria-label="Open work"></section>
+        </div>
+
+        <div class="dash-section">
+          <div class="board-shell">
+            <div class="section-head board-section-head">
+              <h2>Application Board</h2>
+              <span class="pipeline-message" id="pipelineMessage" aria-live="polite"></span>
+              <span class="count" id="pipelineWip">0 active</span>
+            </div>
+            <div class="pipeline" id="pipeline">
+              <div class="pipeline-col">
+                <div class="pipeline-head">Inbox <span id="pipeInboxCount">0</span></div>
+                <div class="pipeline-body" id="pipeNew"></div>
+              </div>
+              <div class="pipeline-col">
+                <div class="pipeline-head">Preparing <span id="pipePrepCount">0</span></div>
+                <div class="pipeline-body" id="pipePrep"></div>
+              </div>
+              <div class="pipeline-col">
+                <div class="pipeline-head">Ready <span id="pipeReadyCount">0</span></div>
+                <div class="pipeline-body" id="pipeReady"></div>
+              </div>
+              <div class="pipeline-col">
+                <div class="pipeline-head">Applied <span id="pipeAppliedCount">0</span></div>
+                <div class="pipeline-body" id="pipeApplied"></div>
+              </div>
+              <div class="pipeline-col">
+                <div class="pipeline-head">Waiting <span id="pipeWaitingCount">0</span></div>
+                <div class="pipeline-body" id="pipeWaiting"></div>
+              </div>
+              <div class="pipeline-col">
+                <div class="pipeline-head">Closed <span id="pipeClosedCount">0</span></div>
+                <div class="pipeline-body" id="pipeClosed"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="dash-split">
+          <div class="card">
+            <div class="card-head">
+              <h2>Activity</h2>
+              <span class="card-kicker">recent</span>
+            </div>
+            <div class="timeline" id="dashboardTimeline"></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <h2>Runs</h2>
+              <span class="card-kicker">agent</span>
+            </div>
+            <div class="workflow-list" id="workflowList"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ═══════════════ Actions ═══════════════ -->
+      <section class="view view-actions" id="view-actions" data-view="actions">
+        <header class="view-header actions-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Disposition</span>
+            <h1>Actions</h1>
+          </div>
+          <span class="pipeline-message" id="actionsMessage" aria-live="polite"></span>
+        </header>
+        <div class="stat-strip" id="actionsStats"></div>
+        <div class="toolbar actions-toolbar">
+          <input type="text" class="input" id="actionsSearch" placeholder="Filter actions">
+          <div class="filter-bar" id="actionsFilters">
+            <button class="chip active" data-action-filter="all">All</button>
+            <button class="chip" data-action-filter="do_now">Do Now</button>
+            <button class="chip" data-action-filter="review">Review</button>
+            <button class="chip" data-action-filter="state">State</button>
+            <button class="chip" data-action-filter="hermes">Hermes</button>
+            <button class="chip" data-action-filter="backlog">Backlog</button>
+          </div>
+        </div>
+        <div class="actions-board" id="actionsBoard"></div>
+      </section>
+
+      <!-- ═══════════════ Brain ═══════════════ -->
+      <section class="view" id="view-brain" data-view="brain">
+        <header class="view-header brain-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Memory</span>
+            <h1>Brain</h1>
+          </div>
+          <input type="text" class="input brain-search" id="brainSearch" placeholder="Filter memory">
+        </header>
+        <div class="stat-strip" id="brainStats"></div>
+        <div class="brain-toolbar">
+          <div class="section-head">
+            <h2>Areas</h2>
+            <span class="count" id="brainAreaCount">0</span>
+          </div>
+          <div class="brain-area-list" id="brainAreaList"></div>
+        </div>
+        <section class="brain-ledger">
+          <div class="section-head">
+            <h2>Memory Ledger</h2>
+            <span class="count" id="brainEventCount">0</span>
+          </div>
+          <div class="brain-list" id="brainList"></div>
+        </section>
+      </section>
+
+      <!-- ═══════════════ Discovery ═══════════════ -->
+      <section class="view" id="view-discovery" data-view="discovery">
+        <header class="view-header discovery-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Find Jobs</span>
+            <h1>Lead Board</h1>
+          </div>
+          <button class="btn" type="button" id="discoveryRefresh" title="Refresh discovery">
+            <span class="material-symbols-outlined btn-icon">refresh</span>
+            Refresh
+          </button>
+        </header>
+        <div class="stat-strip" id="discoveryStats"></div>
+        <div class="card discovery-console">
+          <form class="discovery-form" id="discoverySearchForm">
+            <span class="form-label">Search</span>
+            <input type="text" class="input discovery-input" id="discoveryQuery" placeholder="Role, company, skill, location, or ATS URL">
+            <input type="number" class="discovery-limit" id="discoveryLimit" min="1" max="25" value="8" aria-label="Result limit">
+            <label class="discovery-toggle" title="When enabled, JobApps tries to hydrate the lead from the official ATS page before saving it."><input type="checkbox" id="discoveryHydrate" checked> official details</label>
+            <button class="btn btn-primary" type="submit" title="Search job sources using exactly what you typed. JobApps will not add suggested terms.">
+              <span class="material-symbols-outlined btn-icon">travel_explore</span>
+              Search Jobs
+            </button>
+          </form>
+          <form class="discovery-form" id="discoveryHydrateForm">
+            <span class="form-label">Add URL</span>
+            <input type="url" class="input discovery-input" id="discoveryUrl" placeholder="https://boards.greenhouse.io/...">
+            <button class="btn" type="submit" title="Save one posting from an ATS URL and pull official details when available.">
+              <span class="material-symbols-outlined btn-icon">link</span>
+              Add Lead
+            </button>
+          </form>
+          <div class="discovery-message" id="discoveryMessage"></div>
+        </div>
+        <div class="toolbar discovery-toolbar">
+          <input type="text" class="input" id="discoveryFilter" placeholder="Filter">
+          <div class="filter-bar" id="discoveryFilters">
+            <button class="chip active" data-discovery-filter="all">All</button>
+            <button class="chip" data-discovery-filter="new">Inbox</button>
+            <button class="chip" data-discovery-filter="ready">Ready</button>
+            <button class="chip" data-discovery-filter="approved">Interesting</button>
+            <button class="chip" data-discovery-filter="needs_review">Review</button>
+            <button class="chip" data-discovery-filter="blocked">Blocked</button>
+            <button class="chip" data-discovery-filter="prepared">Prepared</button>
+          </div>
+          <button class="btn" type="button" id="prepareApprovedDiscovery" title="Create JobApps job records from leads you marked Interesting. This does not apply, submit, or send anything.">Prepare Interesting</button>
+        </div>
+        <div class="discovery-list" id="discoveryList"></div>
+      </section>
+
+      <!-- ═══════════════ Jobs ═══════════════ -->
+      <section class="view" id="view-jobs" data-view="jobs">
+        <header class="view-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Opportunities</span>
+            <h1>Jobs</h1>
+          </div>
+        </header>
+        <div class="toolbar">
+          <input type="text" class="input" id="jobsSearch" placeholder="Filter">
+          <div class="filter-bar" id="jobsFilters">
+            <button class="chip active" data-filter="all">All</button>
+            <button class="chip" data-filter="apply">Apply</button>
+            <button class="chip" data-filter="skip">Skip</button>
+            <button class="chip" data-filter="pending">Pending</button>
+          </div>
+        </div>
+        <div class="jobs-layout">
+          <div class="jobs-list" id="jobsList"></div>
+          <aside class="job-detail-panel" id="jobDetailPanel" aria-label="Job detail"></aside>
+        </div>
+      </section>
+
+      <!-- ═══════════════ Materials ═══════════════ -->
+      <section class="view" id="view-materials" data-view="materials">
+        <header class="view-header material-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Job Files</span>
+            <h1>Materials</h1>
+          </div>
+        </header>
+        <div class="stat-strip" id="materialStats"></div>
+        <div class="materials-layout">
+          <section class="materials-main">
+            <section class="materials-overview" id="materialsOverview"></section>
+            <div class="section-head">
+              <h2>Jobs</h2>
+              <span class="count" id="generatedMaterialCount">0</span>
+            </div>
+            <div class="material-list" id="materialsList"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- ═══════════════ Network ═══════════════ -->
+      <section class="view" id="view-network" data-view="network">
+        <header class="view-header">
+          <div class="view-header-main">
+            <span class="eyebrow">People</span>
+            <h1>Network</h1>
+          </div>
+        </header>
+        <div class="stat-strip" id="networkStats"></div>
+        <div class="network-board" id="networkGrid">
+          <div class="empty-state">No contacts yet</div>
+        </div>
+      </section>
+
+      <!-- ═══════════════ Activity ═══════════════ -->
+      <section class="view" id="view-activity" data-view="activity">
+        <header class="view-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Log</span>
+            <h1>Events</h1>
+          </div>
+        </header>
+        <div class="activity-timeline" id="activityTimeline"></div>
+      </section>
+
+      <!-- ═══════════════ Criteria ═══════════════ -->
+      <section class="view" id="view-criteria" data-view="criteria">
+        <header class="view-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Constraints</span>
+            <h1>Rules</h1>
+          </div>
+        </header>
+        <div class="criteria-grid" id="criteriaGrid"></div>
+      </section>
+
+      <!-- ═══════════════ Sessions ═══════════════ -->
+      <section class="view" id="view-sessions" data-view="sessions">
+        <header class="view-header sessions-header">
+          <div class="view-header-main">
+            <span class="eyebrow">History</span>
+            <h1>Sessions</h1>
+          </div>
+          <button class="btn" type="button" id="sessionRefresh" title="Refresh sessions">
+            <span class="material-symbols-outlined btn-icon">refresh</span>
+            Refresh
+          </button>
+        </header>
+        <div class="stat-strip" id="sessionSummary"></div>
+        <div class="session-list" id="sessionsList"></div>
+      </section>
+
+      <!-- ═══════════════ Chat ═══════════════ -->
+      <section class="view" id="view-chat" data-view="chat">
+        <div class="chat-grid">
+          <div class="chat-wrap noise">
+            <div class="transcript" id="transcript" role="log" aria-live="polite"></div>
+            <div class="composer-shell">
+              <div class="command-menu" id="commandMenu" hidden></div>
+              <form class="composer" id="composer" autocomplete="off">
+                <textarea name="message" id="composerInput" class="composer-input" placeholder="Message Hermes" rows="1" spellcheck="true"></textarea>
+                <button type="submit" class="composer-send" aria-label="Send">
+                  <span class="material-symbols-outlined">send</span>
+                </button>
+              </form>
+            </div>
+          </div>
+          <aside class="agent-panel noise" aria-label="Agent runtime">
+            <div class="agent-panel-head">
+              <h2>Agent</h2>
+              <span class="agent-live" id="agentLive">idle</span>
+            </div>
+            <div class="agent-kv">
+              <span>Profile</span><strong id="agentProfile">jobapps</strong>
+              <span>Session</span><strong id="agentSession">jobapps-cockpit</strong>
+              <span>Model</span><strong id="agentModel">jobapps</strong>
+              <span>API</span><strong id="agentApi">checking</strong>
+              <span>Stream</span><strong id="agentStreaming">checking</strong>
+              <span>Runs</span><strong id="agentRuns">checking</strong>
+              <span>Commands</span><strong id="agentCommands">checking</strong>
+            </div>
+            <div class="agent-section">
+              <div class="agent-section-head">
+                <h3>Usage</h3>
+                <span id="agentUsageModel">turn</span>
+              </div>
+              <div class="usage-grid" aria-label="Token usage">
+                <span>Input</span><strong id="usageInput">0</strong>
+                <span>Output</span><strong id="usageOutput">0</strong>
+                <span>Total</span><strong id="usageTotal">0</strong>
+                <span>Cache</span><strong id="usageCache">0</strong>
+                <span>Calls</span><strong id="usageCalls">0</strong>
+                <span>Context</span><strong id="usageContext">0%</strong>
+              </div>
+            </div>
+            <div class="agent-events" id="agentEvents"></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="material-viewer" id="materialViewer" hidden>
+    <div class="material-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="materialViewerTitle">
+      <div class="material-viewer-head">
+        <div>
+          <span class="eyebrow" id="materialViewerKind">Material</span>
+          <h2 id="materialViewerTitle">Preview</h2>
+          <p id="materialViewerMeta"></p>
+        </div>
+        <button class="icon-button" type="button" id="materialViewerClose" aria-label="Close material preview" title="Close preview">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div class="material-viewer-actions" id="materialViewerActions"></div>
+      <div class="material-viewer-body" id="materialViewerBody"></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
