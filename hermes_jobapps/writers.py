@@ -20,6 +20,20 @@ BANNED_TEXT = (
     "leveraging",
 )
 
+META_CONTAMINATION_PATTERNS = (
+    "learned preference",
+    "apply learned preference",
+    "weak networking replies",
+    "approval gate",
+    "review_status",
+    "tailoring_summary",
+    "jd-specific target",
+    "frame experience truthfully",
+    "resume tailoring build",
+    "next step i would want",
+    "follow up after",
+)
+
 
 def draft_materials(
     job: dict[str, Any],
@@ -38,9 +52,12 @@ def draft_materials(
 
     drafts = {
         "resume_notes": _resume_notes(role_family, angle, evaluation, tailoring_targets, learning_patterns),
-        "cover_letter": _clean_banned(_cover_letter(company, title, role_family, angle, tailoring_targets, learning_patterns)),
-        "short_answers": _short_answers(company, title, angle, tailoring_targets, learning_patterns),
-        "outreach": _clean_banned(_outreach(company, title, angle, name, config, learning_patterns)),
+        "cover_letter": _candidate_facing(_clean_banned(_cover_letter(company, title, role_family, angle, tailoring_targets))),
+        "short_answers": {
+            key: _candidate_facing(_clean_banned(value))
+            for key, value in _short_answers(company, title, angle, tailoring_targets).items()
+        },
+        "outreach": _candidate_facing(_clean_banned(_outreach(company, title, angle, name, config))),
     }
     return drafts
 
@@ -75,10 +92,6 @@ def _resume_notes(
             notes.append(f"Tailor to JD: {requirement} -> {portrayal}")
         elif requirement:
             notes.append(f"Tailor to JD: {requirement}")
-    for pattern in learning_patterns[:4]:
-        preference = normalize_space(str(pattern.get("preference") or ""))
-        if preference:
-            notes.append(f"Apply learned preference: {preference}")
     return notes
 
 
@@ -88,7 +101,6 @@ def _cover_letter(
     role_family: str,
     angle: str,
     tailoring_targets: list[dict[str, Any]],
-    learning_patterns: list[dict[str, Any]],
 ) -> str:
     hook = {
         "ai_agent_systems": "The interesting part of agentic software is not the chat surface. It is the way state, tools, retrieval, and evaluation move through the system.",
@@ -101,7 +113,6 @@ def _cover_letter(
     }.get(role_family, "The best engineering work starts by making the actual constraint visible.")
 
     tailoring_sentence = _tailoring_sentence(tailoring_targets)
-    learning_sentence = _learning_sentence(learning_patterns)
     return "\n\n".join(
         [
             hook,
@@ -114,8 +125,8 @@ def _cover_letter(
                 "That is the kind of engineering I am trying to keep doing: systems where the data model, user workflow, and technical constraints stay connected."
             ),
             (
-                f"{learning_sentence} I would bring a practical habit of tracing requirements back to working systems, naming uncertainty honestly, and turning ambiguous problems into useful software. "
-                "The next step I would want is a conversation about where this role needs judgment most."
+                "I would bring a practical habit of tracing requirements back to working systems, naming uncertainty honestly, and turning ambiguous problems into useful software. "
+                "I would welcome a conversation about where this role needs judgment most."
             ),
         ]
     )
@@ -126,16 +137,17 @@ def _short_answers(
     title: str,
     angle: str,
     tailoring_targets: list[dict[str, Any]],
-    learning_patterns: list[dict[str, Any]],
 ) -> dict[str, str]:
     tailoring_sentence = _tailoring_sentence(tailoring_targets)
-    learning_sentence = _learning_sentence(learning_patterns)
     return {
         "why_this_role": (
             f"I am interested in the {title} role because the work appears to need {angle.lower()} "
             f"{tailoring_sentence}"
         ),
-        "relevant_experience": learning_sentence.strip(),
+        "relevant_experience": (
+            "I have worked on software where the difficult part was turning an ambiguous workflow into a usable system, "
+            "then keeping the data model, validation rules, and review points honest enough for real operations."
+        ),
         "why_company": (
             f"{company} looks like a place where the hard part is not only building features, but making the system useful under real constraints. "
             "That is the part of software I care about most."
@@ -149,18 +161,14 @@ def _outreach(
     angle: str,
     name: str,
     config: dict[str, Any],
-    learning_patterns: list[dict[str, Any]],
 ) -> str:
     first_name = name.split()[0] if name else "Applicant"
-    days = config.get("followups", {}).get("networking_after_days", 5)
-    learning_sentence = _learning_sentence(learning_patterns)
     return (
         "Hi [Name],\n\n"
-        f"I came across the {title} role at {company} and noticed that the work seems close to {angle.lower()} "
-        f"{learning_sentence}\n\n"
+        f"I came across the {title} role at {company} and noticed that the work seems close to {angle.lower()}. "
+        "I have been looking at roles where the hard part is translating messy operations into reliable software instead of only adding features.\n\n"
         "If you have time in the next few weeks, would you be open to a 20-minute conversation about how your team thinks about this problem?\n\n"
-        f"Best,\n{first_name}\n\n"
-        f"Follow up after {days} days if there is no response."
+        f"Best,\n{first_name}"
     )
 
 
@@ -171,18 +179,18 @@ def _tailoring_sentence(tailoring_targets: list[dict[str, Any]]) -> str:
     requirement = normalize_space(str(target.get("requirement") or ""))
     portrayal = normalize_space(str(target.get("requested_portrayal") or ""))
     if requirement and portrayal:
-        return f"The JD-specific target is {requirement}; I should portray it as {portrayal}"
+        return f"It calls for {requirement.lower()}, and I would connect that to {portrayal.lower()}."
     if requirement:
-        return f"The JD-specific target is {requirement}."
+        return f"It calls for {requirement.lower()}."
     return ""
 
 
-def _learning_sentence(learning_patterns: list[dict[str, Any]]) -> str:
-    preferences = [normalize_space(str(item.get("preference") or "")) for item in learning_patterns]
-    preferences = [item for item in preferences if item]
-    if not preferences:
-        return ""
-    return "Learned preference: " + " ".join(preferences[:2])
+def _candidate_facing(text: str) -> str:
+    lowered = text.lower()
+    for phrase in META_CONTAMINATION_PATTERNS:
+        if phrase in lowered:
+            raise ValueError(f"Generated material contains internal/meta text: {phrase}")
+    return text
 
 
 def _first_person(text: str) -> str:

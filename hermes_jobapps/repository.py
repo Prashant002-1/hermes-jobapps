@@ -17,7 +17,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
+ACTION_CLOSED_STATUSES = ("done", "closed", "complete", "completed", "dismissed", "not_needed", "canceled", "cancelled")
 ACTION_CLOSED_SQL = "('done','closed','complete','completed','dismissed','not_needed','canceled','cancelled')"
+MATERIAL_REVIEW_APPROVAL_ACTIONS = {"review_application_materials", "review_generated_materials"}
+MATERIAL_REVIEW_PROGRESS_TITLE = "Review generated resume and cover letter"
 
 
 class JobRepository:
@@ -1332,41 +1335,113 @@ class JobRepository:
         due_date: str = "",
         notes: str = "",
     ) -> dict[str, Any]:
+        return self.upsert_open_progress_item(
+            title,
+            job_id=job_id,
+            kind=kind,
+            status=status,
+            due_date=due_date,
+            notes=notes,
+        )
+
+    def upsert_open_progress_item(
+        self,
+        title: str,
+        *,
+        job_id: str | None = None,
+        kind: str = "task",
+        status: str = "open",
+        due_date: str = "",
+        notes: str = "",
+    ) -> dict[str, Any]:
+        clean_title = normalize_space_for_db(title)
+        clean_kind = normalize_space_for_db(kind) or "task"
+        clean_status = normalize_space_for_db(status) or "open"
+        clean_due_date = normalize_space_for_db(due_date)
+        clean_notes = str(notes or "").strip()
+        title_key = normalize_action_title(clean_title)
         now = utc_now()
         item_id = uuid.uuid4().hex[:12]
         with self._connect() as conn:
+            if job_id is None:
+                candidate_rows = conn.execute(
+                    f"""
+                    SELECT * FROM progress_items
+                    WHERE job_id IS NULL
+                      AND lower(COALESCE(kind, '')) = lower(?)
+                      AND lower(COALESCE(status, '')) NOT IN {ACTION_CLOSED_SQL}
+                    ORDER BY updated_at DESC, created_at DESC
+                    """,
+                    (clean_kind,),
+                ).fetchall()
+            else:
+                candidate_rows = conn.execute(
+                    f"""
+                    SELECT * FROM progress_items
+                    WHERE job_id = ?
+                      AND lower(COALESCE(kind, '')) = lower(?)
+                      AND lower(COALESCE(status, '')) NOT IN {ACTION_CLOSED_SQL}
+                    ORDER BY updated_at DESC, created_at DESC
+                    """,
+                    (job_id, clean_kind),
+                ).fetchall()
+            current = next((row for row in candidate_rows if normalize_action_title(row["title"]) == title_key), None)
+            if current is not None:
+                next_due_date = clean_due_date or current["due_date"] or ""
+                next_notes = clean_notes or current["notes"] or ""
+                conn.execute(
+                    """
+                    UPDATE progress_items
+                    SET title = ?, kind = ?, status = ?, due_date = ?, notes = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (current["title"], clean_kind, clean_status, next_due_date, next_notes, now, current["id"]),
+                )
+                self._record_brain_event_conn(
+                    conn,
+                    event_type="progress_item_updated",
+                    title=current["title"],
+                    content=next_notes or current["title"],
+                    job_id=current["job_id"],
+                    entity_type="job_search",
+                    entity_title=clean_kind,
+                    source="app",
+                    confidence=0.75,
+                    importance=0.5,
+                    occurred_at=now,
+                    metadata={
+                        "progress_item_id": current["id"],
+                        "kind": clean_kind,
+                        "status": clean_status,
+                        "due_date": next_due_date,
+                        "idempotent_reuse": True,
+                    },
+                )
+                row = conn.execute("SELECT * FROM progress_items WHERE id = ?", (current["id"],)).fetchone()
+                return dict(row)
             conn.execute(
                 """
                 INSERT INTO progress_items (id, job_id, title, kind, status, due_date, notes, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (item_id, job_id, title, kind, status, due_date, notes, now, now),
+                (item_id, job_id, clean_title, clean_kind, clean_status, clean_due_date, clean_notes, now, now),
             )
             self._record_brain_event_conn(
                 conn,
                 event_type="progress_item",
-                title=title,
-                content=notes or title,
+                title=clean_title,
+                content=clean_notes or clean_title,
                 job_id=job_id,
                 entity_type="job_search",
-                entity_title=kind,
+                entity_title=clean_kind,
                 source="app",
                 confidence=0.75,
                 importance=0.5,
                 occurred_at=now,
-                metadata={"progress_item_id": item_id, "kind": kind, "status": status, "due_date": due_date},
+                metadata={"progress_item_id": item_id, "kind": clean_kind, "status": clean_status, "due_date": clean_due_date},
             )
-        return {
-            "id": item_id,
-            "job_id": job_id,
-            "title": title,
-            "kind": kind,
-            "status": status,
-            "due_date": due_date,
-            "notes": notes,
-            "created_at": now,
-            "updated_at": now,
-        }
+            row = conn.execute("SELECT * FROM progress_items WHERE id = ?", (item_id,)).fetchone()
+        return dict(row)
 
     def update_progress_item(
         self,
@@ -1406,6 +1481,68 @@ class JobRepository:
             )
             row = conn.execute("SELECT * FROM progress_items WHERE id = ?", (item_id,)).fetchone()
         return dict(row)
+
+    def _close_material_review_progress_for_approval_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        job_id: str | None,
+        approval_id: str,
+        approval_status: str,
+        payload: dict[str, Any],
+        now: str,
+    ) -> None:
+        if not job_id:
+            return
+        rows = conn.execute(
+            f"""
+            SELECT * FROM progress_items
+            WHERE job_id = ?
+              AND lower(COALESCE(kind, '')) = 'material_review'
+              AND lower(COALESCE(status, '')) NOT IN {ACTION_CLOSED_SQL}
+            ORDER BY updated_at DESC, created_at DESC
+            """,
+            (job_id,),
+        ).fetchall()
+        linked_progress_id = normalize_space_for_db(payload.get("progress_item_id", ""))
+        review_title_key = normalize_action_title(MATERIAL_REVIEW_PROGRESS_TITLE)
+        rows_to_close = [
+            row
+            for row in rows
+            if row["id"] == linked_progress_id or normalize_action_title(row["title"]) == review_title_key
+        ]
+        progress_status = "done" if approval_status == "approved" else "not_needed"
+        for row in rows_to_close:
+            note = row["notes"] or ""
+            disposition_note = f"Material review {approval_status} via approval {approval_id}."
+            next_note = note if disposition_note in note else "\n".join(part for part in [note, disposition_note] if part)
+            conn.execute(
+                """
+                UPDATE progress_items
+                SET status = ?, notes = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (progress_status, next_note, now, row["id"]),
+            )
+            self._record_brain_event_conn(
+                conn,
+                event_type="progress_item_disposition",
+                title=f"{row['title']}: {progress_status}",
+                content=disposition_note,
+                job_id=job_id,
+                entity_type="job_search",
+                entity_title=row["kind"],
+                source="cockpit",
+                confidence=0.9,
+                importance=0.56,
+                occurred_at=now,
+                metadata={
+                    "progress_item_id": row["id"],
+                    "approval_id": approval_id,
+                    "approval_status": approval_status,
+                    "status": progress_status,
+                },
+            )
 
     def upsert_contact(
         self,
@@ -2000,6 +2137,42 @@ class JobRepository:
             row = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
         return decode_approval(row)
 
+    def upsert_pending_approval(
+        self,
+        action: str,
+        *,
+        job_id: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean_action = normalize_space_for_db(action)
+        incoming_payload = payload or {}
+        with self._connect() as conn:
+            if job_id is None:
+                row = conn.execute(
+                    """
+                    SELECT * FROM approvals
+                    WHERE job_id IS NULL AND action = ? AND status = 'pending'
+                    ORDER BY updated_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (clean_action,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM approvals
+                    WHERE job_id = ? AND action = ? AND status = 'pending'
+                    ORDER BY updated_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (job_id, clean_action),
+                ).fetchone()
+        if row is None:
+            return self.create_approval(clean_action, job_id=job_id, status="pending", payload=incoming_payload)
+        existing_payload = json.loads(row["payload"] or "{}")
+        existing_payload.update(incoming_payload)
+        return self.update_approval(row["id"], "pending", payload=existing_payload)
+
     def update_approval(
         self,
         approval_id: str,
@@ -2037,6 +2210,15 @@ class JobRepository:
                 occurred_at=now,
                 metadata={"approval_id": approval_id, "status": status},
             )
+            if status in {"approved", "rejected"} and current["action"] in MATERIAL_REVIEW_APPROVAL_ACTIONS:
+                self._close_material_review_progress_for_approval_conn(
+                    conn,
+                    job_id=current["job_id"],
+                    approval_id=approval_id,
+                    approval_status=status,
+                    payload=merged_payload,
+                    now=now,
+                )
             row = conn.execute("SELECT * FROM approvals WHERE id = ?", (approval_id,)).fetchone()
         return decode_approval(row)
 
@@ -4182,6 +4364,10 @@ def slugify_brain_slug(value: str) -> str:
 
 def normalize_space_for_db(value: str) -> str:
     return " ".join(str(value or "").split())
+
+
+def normalize_action_title(value: str) -> str:
+    return normalize_space_for_db(value).casefold()
 
 
 def normalize_email_status(status: str) -> str:

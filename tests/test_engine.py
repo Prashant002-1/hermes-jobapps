@@ -319,6 +319,52 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(payload["state"]["followup_count"], 0)
             self.assertEqual(payload["state"]["approval_count"], 0)
 
+    def test_material_approval_disposition_closes_linked_review_progress_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = AppState(None, str(Path(tmpdir) / "state.sqlite3"))
+            record = state.repo.create_job(
+                {
+                    "title": "Data Operations Associate",
+                    "company": "ExampleCo",
+                    "description": "Review account data and reconciliation breaks.",
+                },
+                {"decision": "apply", "role_family": "data_engineering", "facts": {}},
+            )
+            job_id = record["job"]["id"]
+            progress = state.repo.create_progress_item(
+                "Review generated resume and cover letter",
+                job_id=job_id,
+                kind="material_review",
+                status="open",
+            )
+            approval = state.repo.create_approval(
+                "review_application_materials",
+                job_id=job_id,
+                payload={"progress_item_id": progress["id"], "material_ids": ["mat1"]},
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/approvals/{approval['id']}/disposition",
+                    data=json.dumps({"action": "approve", "note": "Looks good"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+            self.assertEqual(payload["approval"]["status"], "approved")
+            self.assertEqual(payload["state"]["approval_count"], 0)
+            self.assertEqual(payload["state"]["progress_count"], 0)
+            saved_progress = state.repo.get_job(job_id)["progress_items"][0]
+            self.assertEqual(saved_progress["status"], "done")
+
     def test_dashboard_job_detail_surfaces_outreach_contacts_followups_and_named_materials(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
@@ -1004,6 +1050,93 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(updated["status"], "approved")
             self.assertEqual(updated["payload"]["decided_from"], "test")
 
+    def test_progress_item_tool_reuses_equivalent_open_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            toolbox = AgentToolbox(repo, load_config())
+            record = repo.create_job(
+                {
+                    "title": "Data Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build SQL data quality workflows.",
+                },
+                {"decision": "apply", "facts": {}, "score_0_to_5": 3.0},
+            )
+            job_id = record["job"]["id"]
+
+            first = toolbox.execute(
+                "jobapps_create_progress_item",
+                {
+                    "job_id": job_id,
+                    "title": "Review generated resume and cover letter",
+                    "kind": "material_review",
+                    "status": "open",
+                    "notes": "First pass ready.",
+                },
+            )
+            second = toolbox.execute(
+                "jobapps_create_progress_item",
+                {
+                    "job_id": job_id,
+                    "title": "  review   generated resume and cover letter  ",
+                    "kind": "material_review",
+                    "status": "open",
+                    "due_date": "2026-05-28",
+                    "notes": "Revised pass ready.",
+                },
+            )
+
+            progress_items = repo.get_job(job_id)["progress_items"]
+            self.assertEqual(first["id"], second["id"])
+            self.assertEqual(len(progress_items), 1)
+            self.assertEqual(progress_items[0]["notes"], "Revised pass ready.")
+            self.assertEqual(progress_items[0]["due_date"], "2026-05-28")
+
+    def test_mark_material_ready_reuses_pending_review_action(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            toolbox = AgentToolbox(repo, load_config())
+            record = repo.create_job(
+                {
+                    "title": "Data Operations Associate",
+                    "company": "ExampleCo",
+                    "description": "Review account data and reconciliation breaks.",
+                },
+                {"decision": "apply", "facts": {}, "score_0_to_5": 3.0},
+            )
+            job_id = record["job"]["id"]
+            resume = repo.save_material(job_id, "resume", "resume tex", format="tex")
+            cover = repo.save_material(job_id, "cover_letter", "cover tex", format="tex")
+
+            first = toolbox.execute(
+                "jobapps_mark_material_ready_for_review",
+                {
+                    "job_id": job_id,
+                    "material_ids": [resume["id"]],
+                    "reason": "Resume ready.",
+                },
+            )
+            second = toolbox.execute(
+                "jobapps_mark_material_ready_for_review",
+                {
+                    "job_id": job_id,
+                    "material_ids": [resume["id"], cover["id"]],
+                    "reason": "Resume and cover revised.",
+                },
+            )
+
+            job_state = repo.get_job(job_id)
+            pending_approvals = [item for item in job_state["approvals"] if item["status"] == "pending"]
+            open_progress = [item for item in job_state["progress_items"] if item["status"] == "open"]
+
+            self.assertEqual(first["approval"]["id"], second["approval"]["id"])
+            self.assertEqual(len(pending_approvals), 1)
+            self.assertEqual(pending_approvals[0]["payload"]["material_ids"], [resume["id"], cover["id"]])
+            self.assertEqual(len(open_progress), 1)
+            self.assertEqual(open_progress[0]["kind"], "material_review")
+            self.assertEqual(open_progress[0]["notes"], "Resume and cover revised.")
+            self.assertEqual(second["approval"]["payload"]["progress_item_id"], open_progress[0]["id"])
+
     def test_learning_pattern_tool_persists_user_correction_rule(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
@@ -1144,6 +1277,41 @@ class WritingPromptTests(unittest.TestCase):
         self.assertIn("agent harness language", joined)
         self.assertIn("Build LLM agents with memory and evaluation traces", joined)
         self.assertNotIn("Treat as a gap", joined)
+        self.assertNotIn("Learned preference", joined)
+        self.assertNotIn("JD-specific target", joined)
+
+    def test_draft_materials_rejects_internal_state_leakage(self) -> None:
+        job = {
+            "title": "Data Operations Associate",
+            "company": "ExampleCo",
+            "description": "Reconcile account data and integrate third-party systems.",
+        }
+        evaluation = {
+            "facts": {"company": "ExampleCo", "title": "Data Operations Associate"},
+            "role_family": "data_engineering",
+            "strongest_angle": "Data operations with validation, reconciliation, and integrations.",
+            "evaluation_mode": "blocker_preflight",
+            "tailoring_targets": [],
+            "must_have_matches": [],
+        }
+        context = {
+            "profile_facts": [{"fact_key": "name", "value": "Candidate Example"}],
+            "learning_patterns": [
+                {
+                    "pattern_type": "materials_boundary",
+                    "trigger": "cover letters",
+                    "preference": "Learned preference: weak networking replies should not leak operational states.",
+                }
+            ],
+        }
+
+        drafts = draft_materials(job, evaluation, context, load_config())
+        serialized = json.dumps(drafts).lower()
+
+        self.assertNotIn("learned preference", serialized)
+        self.assertNotIn("weak networking replies", serialized)
+        self.assertNotIn("operational states", serialized)
+        self.assertNotIn("follow up after", serialized)
 
     def test_opportunity_prompt_is_blocker_preflight_and_learning_aware(self) -> None:
         job = {

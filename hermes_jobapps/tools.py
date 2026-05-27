@@ -21,7 +21,7 @@ from .materials import (
     text_diff,
 )
 from .networking import NetworkingService
-from .repository import JobRepository
+from .repository import JobRepository, MATERIAL_REVIEW_PROGRESS_TITLE
 from .writers import draft_materials
 
 
@@ -1139,23 +1139,25 @@ class AgentToolbox:
             self.repo.update_material(material_id, metadata={"review_status": "ready_for_review"})
             for material_id in material_ids
         ]
-        approval = self.repo.create_approval(
+        reason = payload.get("reason", "Materials ready for final human review.")
+        progress_item = self.repo.upsert_open_progress_item(
+            MATERIAL_REVIEW_PROGRESS_TITLE,
+            job_id=payload["job_id"],
+            kind="material_review",
+            status="open",
+            notes=reason,
+        )
+        approval = self.repo.upsert_pending_approval(
             "review_application_materials",
             job_id=payload["job_id"],
             payload={
                 "material_ids": material_ids,
-                "reason": payload.get("reason", "Materials ready for final human review."),
+                "reason": reason,
                 "approval_gate": "Do not send or submit these materials until approved.",
+                "progress_item_id": progress_item["id"],
             },
         )
-        self.repo.create_progress_item(
-            "Review generated resume and cover letter",
-            job_id=payload["job_id"],
-            kind="material_review",
-            status="open",
-            notes=payload.get("reason", "Materials ready for final human review."),
-        )
-        return {"approval": approval, "materials": updated_materials}
+        return {"approval": approval, "materials": updated_materials, "progress_item": progress_item}
 
     def _save_prompt(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.repo.save_prompt_build(
