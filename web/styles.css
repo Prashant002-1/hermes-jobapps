@@ -2630,6 +2630,10 @@ body::after {
   max-width: 280px;
 }
 .job-status-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
   margin-top: var(--space-3);
 }
 

@@ -27,6 +27,7 @@ provides_tools:
   - jobapps_update_proof_lifecycle
   - jobapps_evaluate_job
   - jobapps_prepare_opportunity
+  - jobapps_start_material_prep
   - jobapps_draft_materials
   - jobapps_record_job
   - jobapps_save_material

@@ -18,7 +18,7 @@ from .discovery import DiscoveryError, DiscoveryService
 from .hermes_commands import HermesCommandError, HermesSlashClient
 from .hermes_client import HermesAPIError, HermesClient
 from .repository import JobRepository
-from .runs import HermesRunManager
+from .runs import ACTIVE_STATUSES, HermesRunManager
 from .tools import AgentToolbox
 from .workflow import JobAppsWorkflow
 
@@ -357,6 +357,20 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                     self._json(state.slash.resume_session(session_id))
                 except HermesCommandError as exc:
                     self._json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
+                return
+
+            if self.path == "/api/jobs/hermes-runs":
+                payload = self._read_json()
+                raw_job_ids = payload.get("job_ids")
+                if isinstance(raw_job_ids, list):
+                    job_ids = [str(item) for item in raw_job_ids if re.fullmatch(r"[a-f0-9]{12}", str(item))]
+                else:
+                    job_ids = _pending_hermes_job_ids(state.repo.dashboard().get("jobs", []))
+                result = state.runs.start_for_jobs(job_ids)
+                dashboard = state.repo.dashboard()
+                specs = state.toolbox.specs()
+                criteria = state.config.get("criteria", {})
+                self._json(result | {"state": dashboard | {"tool_specs": specs, "criteria": criteria}}, HTTPStatus.ACCEPTED)
                 return
 
             match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})/hermes-run", self.path)
@@ -699,6 +713,24 @@ def _normalize_cockpit_status(value: Any) -> str:
 def _normalize_action_item_status(value: Any) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_")
     return ACTION_STATUS_ALIASES.get(normalized, normalized)
+
+
+def _pending_hermes_job_ids(jobs: list[dict[str, Any]]) -> list[str]:
+    blocked_statuses = {"applied", "waiting", "closed", "rejected", "declined", "archived", "hermes_completed"}
+    output: list[str] = []
+    for job in jobs:
+        job_id = str(job.get("id") or "")
+        if not re.fullmatch(r"[a-f0-9]{12}", job_id):
+            continue
+        decision = str(job.get("decision") or job.get("evaluation", {}).get("decision") or "pending").lower()
+        status = str(job.get("status") or "").lower()
+        active_run = job.get("active_run") or {}
+        if decision == "skip" or status in blocked_statuses:
+            continue
+        if active_run.get("status") in ACTIVE_STATUSES:
+            continue
+        output.append(job_id)
+    return output
 
 
 def _read_limit(value: Any, *, default: int, maximum: int) -> int:

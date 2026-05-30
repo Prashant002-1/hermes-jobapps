@@ -50,6 +50,7 @@ If writing in a specific personal voice, load your private voice/style skill fro
 - Project header tags should be few and high-signal.
 - Drop padding tools and broad skill inventories.
 - Save resume builds as LaTeX.
+- Save materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not hand-invent submission filenames.
 - Rotate sections by role using database/config rules. Common role families include software engineering, data engineering, full-stack, backend, AI/ML, analytics, research, IT, internships, and contract roles.
 - Prefer current, user-confirmed proof signals from the database. Public examples must remain synthetic; private employer, school, GPA, immigration, or project details belong in local profile facts and proof points.
 - Use education, GPA, graduation wording, legal work-status language, and headline rules only when they are present in local profile/config records or explicitly supplied by the user.
@@ -67,6 +68,7 @@ If writing in a specific personal voice, load your private voice/style skill fro
 - Connect to the company specifically.
 - Close directly. No corporate filler.
 - Save cover-letter builds as LaTeX.
+- Let JobApps assign the visible filename when the material is saved or compiled.
 - A strategic letter should add narrative and company/problem insight, not repeat the resume bullet-by-bullet.
 
 ## Short Answer Rules

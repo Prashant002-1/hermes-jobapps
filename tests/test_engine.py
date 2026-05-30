@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import subprocess
+import time
 import urllib.request
 import unittest
 from http.server import ThreadingHTTPServer
@@ -15,7 +16,7 @@ from hermes_jobapps.config import load_config
 from hermes_jobapps.discovery import DiscoveryError, DiscoveryService, detect_ats
 from hermes_jobapps.evaluator import evaluate_job
 from hermes_jobapps.importer import import_private_seed
-from hermes_jobapps.latex import compile_tex_to_pdf, write_material_artifact
+from hermes_jobapps.latex import compile_tex_to_pdf, job_material_filename, write_material_artifact
 from hermes_jobapps.networking import NetworkingError, NetworkingService
 from hermes_jobapps.prompts import build_chat_instructions, build_opportunity_prompt
 from hermes_jobapps.repository import JobRepository
@@ -142,6 +143,16 @@ class EvaluationTests(unittest.TestCase):
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_repository_enables_wal_and_busy_timeout_for_parallel_workers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            with repo._connect() as conn:
+                journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+                busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+
+            self.assertEqual(str(journal_mode).lower(), "wal")
+            self.assertGreaterEqual(int(busy_timeout), 30000)
+
     def test_repository_records_job_progress_materials_and_followup(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
@@ -239,6 +250,57 @@ class RepositoryTests(unittest.TestCase):
 
             self.assertEqual(payload["state"]["jobs"][0]["status"], "applied")
             self.assertIn("watch for replies", payload["state"]["jobs"][0]["next_action"])
+
+    def test_batch_hermes_run_endpoint_queues_selected_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = AppState(None, str(Path(tmpdir) / "state.sqlite3"))
+            state.config["materials_path"] = str(Path(tmpdir) / "materials")
+            seed_context(state.repo)
+            first = state.workflow.prepare_opportunity(
+                {
+                    "title": "Data Engineer",
+                    "company": "FirstCo",
+                    "description": "Build data pipelines with SQL and Python. Visa sponsorship is available. Entry level role.",
+                }
+            )["job"]["id"]
+            second = state.workflow.prepare_opportunity(
+                {
+                    "title": "Software Engineer",
+                    "company": "SecondCo",
+                    "description": "Build backend APIs with Python and PostgreSQL. Visa sponsorship is available. Entry level role.",
+                }
+            )["job"]["id"]
+            hermes = ParallelBlockingHermesClient()
+            state.hermes = hermes
+            state.runs = HermesRunManager(state.repo, state.toolbox, hermes, session_key=state.hermes_session_key)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                body = json.dumps({"job_ids": [first, second]}).encode("utf-8")
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/jobs/hermes-runs",
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                started_at = time.monotonic()
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                elapsed = time.monotonic() - started_at
+
+                self.assertLess(elapsed, 0.25)
+                self.assertEqual(payload["queued_count"], 2)
+                self.assertTrue(hermes.two_active.wait(timeout=0.5))
+                self.assertEqual(len([item for item in payload["results"] if item["status"] == "queued"]), 2)
+            finally:
+                hermes.release.set()
+                hermes.all_done.wait(timeout=1)
+                wait_for_jobapps_launch_threads()
+                wait_for_started_run_count(state.repo, 2)
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
 
     def test_action_dispositions_close_progress_followups_and_approvals(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -939,6 +1001,45 @@ class ToolTests(unittest.TestCase):
             self.assertTrue(record["materials"])
             self.assertTrue(record["approvals"])
 
+    def test_native_tui_material_prep_tool_queues_pending_jobs_concurrently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            seed_context(repo)
+            config = load_config()
+            config["materials_path"] = str(Path(tmpdir) / "materials")
+            hermes = ParallelBlockingHermesClient()
+            toolbox = AgentToolbox(repo, config, hermes_factory=lambda _config: hermes)
+            workflow = JobAppsWorkflow(repo, toolbox)
+            workflow.prepare_opportunity(
+                {
+                    "title": "Data Engineer",
+                    "company": "FirstCo",
+                    "description": "Build data pipelines with SQL and Python. Visa sponsorship is available. Entry level role.",
+                }
+            )
+            workflow.prepare_opportunity(
+                {
+                    "title": "Software Engineer",
+                    "company": "SecondCo",
+                    "description": "Build backend APIs with Python and PostgreSQL. Visa sponsorship is available. Entry level role.",
+                }
+            )
+
+            try:
+                started_at = time.monotonic()
+                result = toolbox.execute("jobapps_start_material_prep", {"scope": "pending"})
+                elapsed = time.monotonic() - started_at
+
+                self.assertLess(elapsed, 0.25)
+                self.assertEqual(result["queued_count"], 2)
+                self.assertTrue(hermes.two_active.wait(timeout=0.5))
+                self.assertGreaterEqual(hermes.max_active_count, 2)
+            finally:
+                hermes.release.set()
+                hermes.all_done.wait(timeout=1)
+                wait_for_jobapps_launch_threads()
+                wait_for_started_run_count(repo, 2)
+
     def test_evidence_boolean_flags_reject_string_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
@@ -984,7 +1085,7 @@ class ToolTests(unittest.TestCase):
                 },
             )
 
-            self.assertTrue(saved["file_path"].endswith("exampleco_ai_engineer_cover_letter.tex"))
+            self.assertEqual(Path(saved["file_path"]).name, "Applicant Name - Cover Letter - ExampleCo - AI Engineer.tex")
             self.assertFalse(Path(saved["file_path"]).name == "cover_letter.tex")
             self.assertTrue(Path(saved["file_path"]).exists())
 
@@ -1013,7 +1114,7 @@ class ToolTests(unittest.TestCase):
             )
 
             self.assertEqual(saved["format"], "tex")
-            self.assertTrue(saved["file_path"].endswith("exampleco_ai_engineer_resume_tailoring.tex"))
+            self.assertEqual(Path(saved["file_path"]).name, "Applicant Name - Resume - ExampleCo - AI Engineer.tex")
             self.assertFalse(Path(saved["file_path"]).name == "resume_tailoring.tex")
             self.assertTrue(Path(saved["file_path"]).exists())
 
@@ -1550,8 +1651,8 @@ class MaterialWorkbenchTests(unittest.TestCase):
 
             self.assertEqual(resume["kind"], "resume")
             self.assertEqual(letter["kind"], "cover_letter")
-            self.assertTrue(resume["file_path"].endswith("acme_robotics_new_grads_2026_data_engineer_resume.tex"))
-            self.assertTrue(letter["file_path"].endswith("acme_robotics_new_grads_2026_data_engineer_cover_letter.tex"))
+            self.assertEqual(Path(resume["file_path"]).name, "Applicant Name - Resume - Acme Robotics - New Grads 2026 Data Engineer.tex")
+            self.assertEqual(Path(letter["file_path"]).name, "Applicant Name - Cover Letter - Acme Robotics - New Grads 2026 Data Engineer.tex")
             self.assertFalse(Path(resume["file_path"]).name == "resume.tex")
             self.assertFalse(Path(letter["file_path"]).name == "cover_letter.tex")
             dashboard_job = repo.dashboard()["jobs"][0]
@@ -1559,8 +1660,19 @@ class MaterialWorkbenchTests(unittest.TestCase):
             self.assertEqual(dashboard_job["materials_workbench"]["primary"]["resume"]["id"], resume["id"])
             self.assertEqual(
                 dashboard_job["materials_workbench"]["primary"]["resume"]["display_name"],
-                "acme_robotics_new_grads_2026_data_engineer_resume.tex",
+                "Applicant Name - Resume - Acme Robotics - New Grads 2026 Data Engineer.tex",
             )
+
+    def test_professional_material_filename_sanitizes_without_looking_programmatic(self) -> None:
+        filename = job_material_filename(
+            {"company": "ACME/Data, Inc.", "title": "Software Engineer (New Grad) / Backend"},
+            "resume",
+            "PDF",
+        )
+
+        self.assertEqual(filename, "Applicant Name - Resume - ACME Data Inc. - Software Engineer New Grad Backend.pdf")
+        self.assertNotIn("_", filename)
+        self.assertNotIn("/", filename)
 
     def test_material_workbench_exposes_metadata_pdf_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2070,6 +2182,79 @@ class FakeHermesClient:
         }
 
 
+class ParallelBlockingHermesClient(FakeHermesClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+        self.two_active = threading.Event()
+        self.all_done = threading.Event()
+        self.lock = threading.Lock()
+        self.calls: list[dict] = []
+        self.active_count = 0
+        self.max_active_count = 0
+
+    def start_run(self, prompt: str, **kwargs) -> dict:
+        with self.lock:
+            call_number = len(self.calls) + 1
+            self.calls.append(kwargs)
+            self.active_count += 1
+            self.max_active_count = max(self.max_active_count, self.active_count)
+            if self.active_count >= 2:
+                self.two_active.set()
+        self.release.wait(timeout=0.4)
+        with self.lock:
+            self.active_count -= 1
+            if self.active_count == 0:
+                self.all_done.set()
+        return {
+            "id": f"hrun_parallel_{call_number}",
+            "status": "running",
+            "session_id": kwargs.get("session_id", f"sess_parallel_{call_number}"),
+        }
+
+    def get_run_events(self, run_id: str) -> dict:
+        raise AssertionError("parallel launch should not poll events")
+
+    def stream_chat(self, message: str, **kwargs):
+        yield from ()
+
+
+def wait_for_hermes_run_started(repo: JobRepository, job_id: str, timeout: float = 1.0) -> dict:
+    deadline = time.monotonic() + timeout
+    last_run: dict = {}
+    while time.monotonic() < deadline:
+        run = repo.get_active_hermes_run_for_job(job_id)
+        if run:
+            last_run = run
+            if run.get("hermes_run_id"):
+                return run
+        time.sleep(0.01)
+    raise AssertionError(f"Hermes run did not start in time: {last_run}")
+
+
+def wait_for_started_run_count(repo: JobRepository, count: int, timeout: float = 1.0) -> list[dict]:
+    deadline = time.monotonic() + timeout
+    last_runs: list[dict] = []
+    while time.monotonic() < deadline:
+        last_runs = [
+            run for run in repo.list_agent_runs(limit=100)
+            if run.get("kind") == "hermes_run" and run.get("hermes_run_id")
+        ]
+        if len(last_runs) >= count:
+            return last_runs
+        time.sleep(0.01)
+    raise AssertionError(f"Expected {count} started Hermes runs, saw {len(last_runs)}: {last_runs}")
+
+
+def wait_for_jobapps_launch_threads(timeout: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout
+    for thread in list(threading.enumerate()):
+        if not thread.name.startswith("jobapps-hermes-run-"):
+            continue
+        remaining = max(0.01, deadline - time.monotonic())
+        thread.join(timeout=remaining)
+
+
 class FakeSlashClient:
     def __init__(self) -> None:
         self.commands: list[str] = []
@@ -2230,6 +2415,124 @@ class HermesRunManagerTests(unittest.TestCase):
     def test_extract_text_accepts_hermes_output_string(self) -> None:
         self.assertEqual(_extract_text({"output": "Hermes API smoke OK"}), "Hermes API smoke OK")
 
+    def test_starts_multiple_job_runs_without_serializing_hermes_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            seed_context(repo)
+            config = load_config()
+            config["materials_path"] = str(Path(tmpdir) / "materials")
+            toolbox = AgentToolbox(repo, config)
+            workflow = JobAppsWorkflow(repo, toolbox)
+            first = workflow.prepare_opportunity(
+                {
+                    "title": "Data Engineer",
+                    "company": "FirstCo",
+                    "description": "Build data pipelines with SQL and Python. Visa sponsorship is available. Entry level role.",
+                }
+            )["job"]["id"]
+            second = workflow.prepare_opportunity(
+                {
+                    "title": "Software Engineer",
+                    "company": "SecondCo",
+                    "description": "Build backend APIs with Python and PostgreSQL. Visa sponsorship is available. Entry level role.",
+                }
+            )["job"]["id"]
+            hermes = ParallelBlockingHermesClient()
+            manager = HermesRunManager(repo, toolbox, hermes)
+
+            started_at = time.monotonic()
+            try:
+                first_record = manager.start_for_job(first)
+                second_record = manager.start_for_job(second)
+                elapsed = time.monotonic() - started_at
+
+                self.assertLess(elapsed, 0.25, "JobApps should queue Hermes launches without waiting for Hermes acceptance.")
+                self.assertTrue(hermes.two_active.wait(timeout=0.5), "Two Hermes start_run calls should be active at the same time.")
+                self.assertGreaterEqual(hermes.max_active_count, 2)
+                self.assertEqual(first_record["active_run"]["status"], "queued")
+                self.assertEqual(second_record["active_run"]["status"], "queued")
+            finally:
+                hermes.release.set()
+                hermes.all_done.wait(timeout=1)
+                wait_for_jobapps_launch_threads()
+                wait_for_started_run_count(repo, 2)
+
+    def test_start_for_job_reuses_active_same_job_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            seed_context(repo)
+            config = load_config()
+            config["materials_path"] = str(Path(tmpdir) / "materials")
+            toolbox = AgentToolbox(repo, config)
+            workflow = JobAppsWorkflow(repo, toolbox)
+            job_id = workflow.prepare_opportunity(
+                {
+                    "title": "Data Engineer",
+                    "company": "FirstCo",
+                    "description": "Build data pipelines with SQL and Python. Visa sponsorship is available. Entry level role.",
+                }
+            )["job"]["id"]
+            hermes = ParallelBlockingHermesClient()
+            manager = HermesRunManager(repo, toolbox, hermes)
+
+            try:
+                first_record = manager.start_for_job(job_id)
+                second_record = manager.start_for_job(job_id)
+
+                self.assertEqual(first_record["active_run"]["id"], second_record["active_run"]["id"])
+                self.assertTrue(second_record["active_run"]["existing"])
+                hermes_runs = [run for run in repo.list_agent_runs(job_id=job_id) if run["kind"] == "hermes_run"]
+                self.assertEqual(len(hermes_runs), 1)
+            finally:
+                hermes.release.set()
+                hermes.all_done.wait(timeout=1)
+                wait_for_jobapps_launch_threads()
+                wait_for_started_run_count(repo, 1)
+
+    def test_start_for_job_dedupes_same_job_across_manager_instances(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            seed_context(repo)
+            config = load_config()
+            config["materials_path"] = str(Path(tmpdir) / "materials")
+            toolbox = AgentToolbox(repo, config)
+            workflow = JobAppsWorkflow(repo, toolbox)
+            job_id = workflow.prepare_opportunity(
+                {
+                    "title": "Data Engineer",
+                    "company": "RaceCo",
+                    "description": "Build data pipelines with SQL and Python. Visa sponsorship is available. Entry level role.",
+                }
+            )["job"]["id"]
+            hermes = ParallelBlockingHermesClient()
+            managers = [HermesRunManager(repo, toolbox, hermes), HermesRunManager(repo, toolbox, hermes)]
+            records: list[dict] = []
+            errors: list[BaseException] = []
+
+            def start(manager: HermesRunManager) -> None:
+                try:
+                    records.append(manager.start_for_job(job_id))
+                except BaseException as exc:  # pragma: no cover - surfaced by assertions below.
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=start, args=(manager,)) for manager in managers]
+            try:
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=1)
+
+                self.assertFalse(errors)
+                self.assertEqual(len(records), 2)
+                hermes_runs = [run for run in repo.list_agent_runs(job_id=job_id) if run["kind"] == "hermes_run"]
+                self.assertEqual(len(hermes_runs), 1)
+                self.assertEqual({record["active_run"]["id"] for record in records}, {hermes_runs[0]["id"]})
+            finally:
+                hermes.release.set()
+                hermes.all_done.wait(timeout=1)
+                wait_for_jobapps_launch_threads()
+                wait_for_started_run_count(repo, 1)
+
     def test_hermes_run_refresh_ingests_structured_records_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
@@ -2253,7 +2556,10 @@ class HermesRunManagerTests(unittest.TestCase):
             manager = HermesRunManager(repo, toolbox, FakeHermesClient())
 
             started = manager.start_for_job(job_id)
-            self.assertEqual(started["job"]["status"], "hermes_running")
+            self.assertEqual(started["job"]["status"], "hermes_queued")
+            started_run = wait_for_hermes_run_started(repo, job_id)
+            self.assertEqual(started_run["status"], "running")
+            wait_for_jobapps_launch_threads()
 
             refreshed = manager.refresh_for_job(job_id)
             self.assertEqual(refreshed["job"]["status"], "hermes_completed")

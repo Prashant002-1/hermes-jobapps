@@ -97,7 +97,7 @@ def build_cover_letter_tex(job: dict[str, Any], evaluation: dict[str, Any], draf
 
 def write_material_artifact(job_id: str, filename: str, content: str, root: str = "data/materials") -> str:
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", job_id)
-    safe_name = re.sub(r"[^a-zA-Z0-9_.-]", "_", filename)
+    safe_name = safe_material_filename(filename)
     root_path = resolve_project_path(root).expanduser()
     path = _safe_material_artifact_path(root_path, safe_id, safe_name)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -106,36 +106,70 @@ def write_material_artifact(job_id: str, filename: str, content: str, root: str 
 
 
 def job_material_filename(job: dict[str, Any], material_kind: str, extension: str = "tex") -> str:
-    """Build a human-readable, job-linked material filename.
+    """Build a human-readable, submission-ready material filename."""
 
-    Generic names like ``resume.tex`` make the cockpit useless once more than one
-    job has drafts. Keep filenames deterministic: company + role + artifact.
-    """
+    company = _human_filename_part(str(job.get("company") or "Company"), fallback="Company")
+    title = _human_filename_part(str(job.get("title") or job.get("role") or "Role"), fallback="Role")
+    artifact = _material_filename_label(material_kind)
+    ext = _safe_extension(extension)
+    return safe_material_filename(f"Applicant Name - {artifact} - {company} - {title}.{ext}")
 
-    company = _filename_slug(str(job.get("company") or "company"))
-    title = _filename_slug(str(job.get("title") or job.get("role") or "role"))
-    artifact = _filename_slug(_material_filename_label(material_kind))
-    stem = "_".join(part for part in (company, title, artifact) if part)
-    ext = _filename_slug(extension.lstrip(".")) or "txt"
-    return f"{stem}.{ext}"
+
+def safe_material_filename(filename: str) -> str:
+    """Strip unsafe filesystem characters while keeping a human filename."""
+
+    name = str(filename or "Material.txt")
+    name = re.sub(r"[/\\]+", " ", name)
+    name = re.sub(r"[\x00-\x1f\x7f]+", " ", name)
+    stem, suffix = _split_extension(name)
+    stem = _human_filename_part(stem, fallback="Material", max_chars=180)
+    extension = _safe_extension(suffix.lstrip(".") or "txt")
+    return f"{stem}.{extension}"
 
 
 def _material_filename_label(material_kind: str) -> str:
     labels = {
-        "cover_letter": "cover_letter",
-        "outreach": "outreach",
-        "outreach_draft": "outreach_draft",
-        "resume": "resume",
-        "resume_notes": "resume_notes",
-        "resume_tailoring": "resume_tailoring",
-        "short_answers": "short_answers",
+        "cover_letter": "Cover Letter",
+        "outreach": "Outreach",
+        "outreach_draft": "Outreach Draft",
+        "resume": "Resume",
+        "resume_notes": "Resume Notes",
+        "resume_tailoring": "Resume",
+        "short_answers": "Short Answers",
     }
-    return labels.get(str(material_kind or "material"), str(material_kind or "material"))
+    return labels.get(str(material_kind or "material"), _title_label(str(material_kind or "material")))
 
 
-def _filename_slug(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
-    return re.sub(r"_+", "_", slug)
+def _human_filename_part(value: str, *, fallback: str, max_chars: int = 72) -> str:
+    text = str(value or "")
+    text = text.replace("&", " and ")
+    text = re.sub(r"[/\\:]+", " ", text)
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", text)
+    text = re.sub(r"[<>\"|?*]+", "", text)
+    text = re.sub(r"[(),;]+", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" -")
+    text = text or fallback
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit(" ", 1)[0].strip(" -")
+    return clipped or text[:max_chars].strip(" -") or fallback
+
+
+def _title_label(value: str) -> str:
+    words = re.sub(r"[^A-Za-z0-9]+", " ", value).strip().split()
+    return " ".join(word[:1].upper() + word[1:].lower() for word in words) or "Material"
+
+
+def _safe_extension(value: str) -> str:
+    ext = re.sub(r"[^A-Za-z0-9]+", "", str(value or "").lstrip(".")).lower()
+    return ext or "txt"
+
+
+def _split_extension(name: str) -> tuple[str, str]:
+    match = re.match(r"^(.*?)(\.[A-Za-z0-9]{1,8})$", name.strip())
+    if not match:
+        return name, ""
+    return match.group(1), match.group(2)
 
 
 def _safe_material_artifact_path(root_path: Path, safe_id: str, safe_name: str) -> Path:

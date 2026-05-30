@@ -19,6 +19,8 @@ from typing import Any, Iterator
 
 ACTION_CLOSED_STATUSES = ("done", "closed", "complete", "completed", "dismissed", "not_needed", "canceled", "cancelled")
 ACTION_CLOSED_SQL = "('done','closed','complete','completed','dismissed','not_needed','canceled','cancelled')"
+ACTIVE_HERMES_RUN_STATUSES = ("queued", "starting", "running", "requires_action", "in_progress")
+ACTIVE_HERMES_RUN_SQL = "('queued','starting','running','requires_action','in_progress')"
 MATERIAL_REVIEW_APPROVAL_ACTIONS = {"review_application_materials", "review_generated_materials"}
 MATERIAL_REVIEW_PROGRESS_TITLE = "Review generated resume and cover letter"
 
@@ -31,11 +33,12 @@ class JobRepository:
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.path, timeout=30.0)
         try:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
             yield conn
             conn.commit()
         except Exception:
@@ -1912,6 +1915,7 @@ class JobRepository:
                     """,
                     tuple(run_ids),
                 ).fetchall()
+        decoded_agent_runs = [decode_agent_run(row) for row in agent_runs]
         return {
             "job": dict(job),
             "evaluation": json.loads(evaluation["payload"]) if evaluation else None,
@@ -1936,7 +1940,8 @@ class JobRepository:
             "followups": [dict(row) for row in followups],
             "contacts": [decode_contact(row) for row in contact_rows],
             "approvals": [decode_approval(row) for row in approvals],
-            "agent_runs": [decode_agent_run(row) for row in agent_runs],
+            "agent_runs": decoded_agent_runs,
+            "active_run": _active_hermes_run(decoded_agent_runs),
             "agent_run_events": [decode_agent_run_event(row) for row in run_events],
             "tool_calls": [decode_tool_call(row) for row in tool_calls],
         }
@@ -2098,6 +2103,7 @@ class JobRepository:
         job["brain_events"] = brain_events
         job["materials_workbench"] = _materials_workbench(materials, material_revisions)
         job["approvals"] = record.get("approvals") or []
+        job["active_run"] = _active_hermes_run(agent_runs)
         job["hermes_run_status"] = latest_run.get("status") if latest_run else job.get("status")
         job["hermes_run_id"] = latest_run.get("hermes_run_id") if latest_run else job.get("hermes_run_id")
         return job
@@ -3517,6 +3523,50 @@ class JobRepository:
             "updated_at": now,
         }
 
+    def create_hermes_run_unless_active(
+        self,
+        objective: str,
+        *,
+        job_id: str,
+        prompt_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        status: str = "queued",
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically create a Hermes run unless the job already has an active one."""
+
+        now = utc_now()
+        run_id = uuid.uuid4().hex[:12]
+        encoded_metadata = json.dumps(metadata or {})
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                f"""
+                SELECT * FROM agent_runs
+                WHERE job_id = ?
+                  AND kind = 'hermes_run'
+                  AND status IN {ACTIVE_HERMES_RUN_SQL}
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (job_id,),
+            ).fetchone()
+            if existing is not None:
+                return decode_agent_run(existing), False
+            conn.execute(
+                """
+                INSERT INTO agent_runs (
+                    id, job_id, kind, objective, status, prompt_id, hermes_run_id,
+                    hermes_session_id, metadata, created_at, updated_at
+                )
+                VALUES (?, ?, 'hermes_run', ?, ?, ?, '', '', ?, ?, ?)
+                """,
+                (run_id, job_id, objective, status, prompt_id, encoded_metadata, now, now),
+            )
+            row = conn.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return decode_agent_run(row), True
+
     def update_agent_run(
         self,
         run_id: str,
@@ -3605,11 +3655,11 @@ class JobRepository:
     def get_active_hermes_run_for_job(self, job_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT * FROM agent_runs
                 WHERE job_id = ?
                   AND kind = 'hermes_run'
-                  AND status IN ('queued', 'running', 'requires_action', 'in_progress')
+                  AND status IN {ACTIVE_HERMES_RUN_SQL}
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -4585,6 +4635,7 @@ def decode_material_revision(row: sqlite3.Row) -> dict[str, Any]:
 def decode_agent_run(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["metadata"] = json.loads(item.get("metadata") or "{}")
+    item["description"] = item.get("objective", "")
     return item
 
 
@@ -4605,6 +4656,13 @@ def decode_tool_call(row: sqlite3.Row) -> dict[str, Any]:
     item["input"] = json.loads(item["input"])
     item["output"] = json.loads(item["output"])
     return item
+
+
+def _active_hermes_run(agent_runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for run in agent_runs:
+        if run.get("kind") == "hermes_run" and run.get("status") in ACTIVE_HERMES_RUN_STATUSES:
+            return run
+    return None
 
 
 def utc_now() -> str:

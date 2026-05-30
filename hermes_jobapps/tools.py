@@ -21,7 +21,7 @@ from .materials import (
     text_diff,
 )
 from .networking import NetworkingService
-from .repository import JobRepository, MATERIAL_REVIEW_PROGRESS_TITLE
+from .repository import ACTIVE_HERMES_RUN_STATUSES, JobRepository, MATERIAL_REVIEW_PROGRESS_TITLE
 from .writers import draft_materials
 
 
@@ -376,6 +376,19 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "writes": True,
     },
     {
+        "name": "jobapps_start_material_prep",
+        "description": "Queue background Hermes material-prep runs for one job, selected jobs, or all pending apply-intent jobs. Returns immediately and deduplicates active same-job runs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string"},
+                "job_ids": {"type": "array", "items": {"type": "string"}},
+                "scope": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
         "name": "jobapps_draft_materials",
         "description": "Draft resume notes, cover letter text, short answers, and outreach from an evaluation.",
         "input_schema": {
@@ -656,9 +669,16 @@ TOOL_SPECS: list[dict[str, Any]] = [
 
 
 class AgentToolbox:
-    def __init__(self, repo: JobRepository, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        repo: JobRepository,
+        config: dict[str, Any],
+        *,
+        hermes_factory: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> None:
         self.repo = repo
         self.config = config
+        self._hermes_factory = hermes_factory
         self._handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "jobapps_read_context": self._read_context,
             "jobapps_database_health": self._database_health,
@@ -683,6 +703,7 @@ class AgentToolbox:
             "jobapps_update_proof_lifecycle": self._update_proof_lifecycle,
             "jobapps_evaluate_job": self._evaluate_job,
             "jobapps_prepare_opportunity": self._prepare_opportunity,
+            "jobapps_start_material_prep": self._start_material_prep,
             "jobapps_draft_materials": self._draft_materials,
             "jobapps_record_job": self._record_job,
             "jobapps_save_material": self._save_material,
@@ -938,6 +959,39 @@ class AgentToolbox:
             }
         workflow = JobAppsWorkflow(self.repo, self)
         return workflow.prepare_opportunity(job)
+
+    def _start_material_prep(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from .runs import HermesRunManager
+
+        job_ids = _material_prep_job_ids(payload, self.repo.dashboard())
+        if not job_ids:
+            return {
+                "requested_count": 0,
+                "queued_count": 0,
+                "existing_count": 0,
+                "failed_count": 0,
+                "results": [],
+            }
+        hermes_config = self.config.get("hermes", {})
+        manager = HermesRunManager(
+            self.repo,
+            self,
+            self._make_hermes_client(),
+            session_key=hermes_config.get("session_key", "jobapps"),
+        )
+        return manager.start_for_jobs(job_ids)
+
+    def _make_hermes_client(self) -> Any:
+        if self._hermes_factory:
+            return self._hermes_factory(self.config)
+        from .hermes_client import HermesClient
+
+        hermes_config = self.config.get("hermes", {})
+        return HermesClient(
+            base_url=hermes_config.get("api_base"),
+            api_key=hermes_config.get("api_key"),
+            model=hermes_config.get("model"),
+        )
 
     def _draft_materials(self, payload: dict[str, Any]) -> dict[str, Any]:
         context = payload.get("context") or self.repo.career_context()
@@ -1287,6 +1341,44 @@ def provenance_use_for_material(material: dict[str, Any]) -> str:
     if "interview" in kind:
         return "interview"
     return "resume"
+
+
+def _material_prep_job_ids(payload: dict[str, Any], dashboard: dict[str, Any]) -> list[str]:
+    job_ids: list[str] = []
+    if payload.get("job_id"):
+        job_ids.append(str(payload["job_id"]))
+    raw_job_ids = payload.get("job_ids")
+    if isinstance(raw_job_ids, list):
+        job_ids.extend(str(item) for item in raw_job_ids)
+    scope = str(payload.get("scope") or "").strip().lower()
+    if scope in {"pending", "all_pending", "apply_intent"}:
+        job_ids.extend(_pending_material_prep_job_ids(dashboard.get("jobs", [])))
+    output: list[str] = []
+    seen: set[str] = set()
+    for job_id in job_ids:
+        normalized = str(job_id or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        output.append(normalized)
+    return output
+
+
+def _pending_material_prep_job_ids(jobs: list[dict[str, Any]]) -> list[str]:
+    blocked_statuses = {"applied", "waiting", "closed", "rejected", "declined", "archived", "hermes_completed"}
+    output: list[str] = []
+    for job in jobs:
+        decision = str(job.get("decision") or job.get("evaluation", {}).get("decision") or "pending").lower()
+        status = str(job.get("status") or "").lower()
+        active_run = job.get("active_run") or {}
+        if decision == "skip" or status in blocked_statuses:
+            continue
+        if active_run.get("status") in ACTIVE_HERMES_RUN_STATUSES:
+            continue
+        job_id = str(job.get("id") or "").strip()
+        if job_id:
+            output.append(job_id)
+    return output
 
 
 def _profile_value(context: dict[str, Any], key: str, fallback: str) -> str:

@@ -62,6 +62,8 @@ const discoveryFilter = $("#discoveryFilter");
 const discoveryList = $("#discoveryList");
 const prepareApprovedDiscovery = $("#prepareApprovedDiscovery");
 const jobDetailPanel = $("#jobDetailPanel");
+const startPendingHermesRuns = $("#startPendingHermesRuns");
+const jobsMessage = $("#jobsMessage");
 const actionsStats = $("#actionsStats");
 const actionsSearch = $("#actionsSearch");
 const actionsBoard = $("#actionsBoard");
@@ -95,6 +97,7 @@ let discoveryBusy = false;
 let actionsQuery = "";
 let actionsLaneFilter = "all";
 let actionsMessageTimer = null;
+let jobsMessageTimer = null;
 let pipelineMessage = "";
 let pipelineMessageKind = "";
 let pipelineMessageTimer = null;
@@ -1000,6 +1003,21 @@ const setPipelineMessage = (message, kind = "") => {
   }
 };
 
+const setJobsMessage = (message, kind = "") => {
+  if (!jobsMessage) return;
+  jobsMessage.textContent = message || "";
+  jobsMessage.className = `pipeline-message ${kind || ""}`.trim();
+  if (jobsMessageTimer) window.clearTimeout(jobsMessageTimer);
+  if (message) {
+    jobsMessageTimer = window.setTimeout(() => {
+      if (jobsMessage) {
+        jobsMessage.textContent = "";
+        jobsMessage.className = "pipeline-message";
+      }
+    }, kind === "error" ? 6000 : 2800);
+  }
+};
+
 const updateJobStatus = async (jobId, status, note = "Updated from JobApps cockpit.") => {
   if (!jobId || !status) return;
   const label = STATUS_LABELS[status] || humanize(status);
@@ -1674,6 +1692,61 @@ const selectedJob = () => {
   return jobs.find((j) => j.id === currentJobId) || jobs[0] || null;
 };
 
+const jobActiveRun = (job = {}) => job.active_run || null;
+
+const startHermesRun = async (jobId) => {
+  if (!jobId) return;
+  setJobsMessage("starting", "pending");
+  const result = await postJson(`/api/jobs/${encodeURIComponent(jobId)}/hermes-run`, {});
+  if (result?.error) {
+    setJobsMessage(result.error, "error");
+    return;
+  }
+  currentJobId = jobId;
+  const state = await fetchJson("/api/state");
+  if (state) appState = state;
+  const status = result?.active_run?.status || "queued";
+  setJobsMessage(`run ${humanize(status)}`, "ok");
+  renderCurrentView();
+  saveChatState();
+};
+
+const refreshHermesRun = async (jobId) => {
+  if (!jobId) return;
+  setJobsMessage("refreshing", "pending");
+  const result = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/hermes-run`);
+  if (result?.error) {
+    setJobsMessage(result.error, "error");
+    return;
+  }
+  currentJobId = jobId;
+  const state = await fetchJson("/api/state");
+  if (state) appState = state;
+  setJobsMessage("refreshed", "ok");
+  renderCurrentView();
+  saveChatState();
+};
+
+const startPendingMaterialPrep = async () => {
+  setJobsMessage("starting", "pending");
+  const result = await postJson("/api/jobs/hermes-runs", { scope: "pending" });
+  if (result?.error) {
+    setJobsMessage(result.error, "error");
+    return;
+  }
+  if (result?.state) appState = result.state;
+  const queued = Number(result?.queued_count || 0);
+  const existing = Number(result?.existing_count || 0);
+  const failed = Number(result?.failed_count || 0);
+  const parts = [];
+  if (queued) parts.push(`${fmtNum(queued)} queued`);
+  if (existing) parts.push(`${fmtNum(existing)} active`);
+  if (failed) parts.push(`${fmtNum(failed)} failed`);
+  setJobsMessage(parts.join(" · ") || "nothing pending", failed ? "error" : "ok");
+  renderCurrentView();
+  saveChatState();
+};
+
 const materialDisplayName = (item) => (
   item.display_name || item.filename || fileName(item.file_path || item.path || item.pdf_path) || `${item.kind || "material"}.${item.format || "txt"}`
 );
@@ -1724,6 +1797,7 @@ const renderJobs = () => {
 
   jobs.forEach((j) => {
     const decision = j.decision || j.evaluation?.decision || "pending";
+    const activeRun = jobActiveRun(j);
     const row = document.createElement("div");
     row.className = `job-row${j.id === currentJobId ? " active" : ""}`;
     row.innerHTML = `
@@ -1731,7 +1805,7 @@ const renderJobs = () => {
         <div class="job-row-title">${esc(j.title || "untitled")}</div>
         <div class="job-row-company">${esc(j.company || "")}</div>
       </div>
-      <div class="job-row-status">${esc(j.status || "new")}</div>
+      <div class="job-row-status">${esc(activeRun ? `run ${humanize(activeRun.status || "active")}` : (j.status || "new"))}</div>
       <div class="job-row-date">${fmtDate(j.created_at)}</div>
       <span class="badge badge-${classToken(decision, ["apply", "skip", "pending"])}">${esc(decision)}</span>
     `;
@@ -1774,6 +1848,16 @@ const renderJobDetail = () => {
   const contacts = outreach.contacts || job.contacts || [];
   const followups = outreach.followups || job.followups || [];
   const jobUrl = safeHref(job.url || job.apply_url || "");
+  const activeRun = jobActiveRun(job);
+  const runStatus = activeRun?.status || job.hermes_run_status || "";
+  const runActionMarkup = activeRun
+    ? `
+      <span class="badge">run: ${esc(humanize(runStatus || "active"))}</span>
+      <button class="link-button" type="button" data-refresh-hermes-run="${esc(job.id)}">Refresh Run</button>
+    `
+    : `
+      <button class="link-button" type="button" data-start-hermes-run="${esc(job.id)}">Start Prep</button>
+    `;
   const stateSteps = [
     ["inbox", "Preflight"],
     ["preparing", "Tailor"],
@@ -1904,6 +1988,7 @@ const renderJobDetail = () => {
       </div>
       <div class="job-status-toolbar">
         ${statusSelectMarkup(job, "detail-status-menu")}
+        ${runActionMarkup}
       </div>
       ${jobUrl ? `<a class="link-button material-link" href="${esc(jobUrl)}" target="_blank" rel="noopener">Open posting</a>` : ""}
     </div>
@@ -1971,6 +2056,12 @@ const renderJobDetail = () => {
   });
   jobDetailPanel.querySelectorAll("[data-preview-material]").forEach((button) => {
     button.addEventListener("click", () => openMaterialViewer(button.dataset.previewMaterial || ""));
+  });
+  jobDetailPanel.querySelectorAll("[data-start-hermes-run]").forEach((button) => {
+    button.addEventListener("click", () => startHermesRun(button.dataset.startHermesRun || ""));
+  });
+  jobDetailPanel.querySelectorAll("[data-refresh-hermes-run]").forEach((button) => {
+    button.addEventListener("click", () => refreshHermesRun(button.dataset.refreshHermesRun || ""));
   });
   attachJobStatusControls(jobDetailPanel);
 };
@@ -3665,6 +3756,11 @@ if (prepareApprovedDiscovery) {
   prepareApprovedDiscovery.addEventListener("click", () => {
     if (discoveryBusy) return;
     prepareApprovedDiscoveryCandidates().catch((err) => setDiscoveryMessage(err.message || "prepare failed", "error"));
+  });
+}
+if (startPendingHermesRuns) {
+  startPendingHermesRuns.addEventListener("click", () => {
+    startPendingMaterialPrep().catch((err) => setJobsMessage(err.message || "start failed", "error"));
   });
 }
 if (discoveryFilter) {

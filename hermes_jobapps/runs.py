@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
 from typing import Any
 
 from .hermes_client import HermesAPIError, HermesClient
@@ -14,6 +15,7 @@ from .tools import AgentToolbox
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "canceled", "expired"}
+ACTIVE_STATUSES = {"queued", "starting", "running", "requires_action", "in_progress"}
 
 
 class HermesRunManager:
@@ -29,54 +31,134 @@ class HermesRunManager:
         self.toolbox = toolbox
         self.hermes = hermes
         self.session_key = session_key
+        self._job_locks: dict[str, threading.Lock] = {}
+        self._job_locks_guard = threading.Lock()
 
     def start_for_job(self, job_id: str) -> dict[str, Any]:
-        active = self.repo.get_active_hermes_run_for_job(job_id)
-        if active:
+        with self._job_lock(job_id):
+            active = self.repo.get_active_hermes_run_for_job(job_id)
+            if active:
+                record = self.repo.get_job(job_id)
+                active_run = self.repo.get_agent_run(active["id"])
+                active_run["existing"] = True
+                record["active_run"] = active_run
+                return record
+
             record = self.repo.get_job(job_id)
-            record["active_run"] = self.repo.get_agent_run(active["id"])
-            return record
+            prompt = build_opportunity_prompt(record["job"], self.repo.career_context(), record["evaluation"])
+            prompt_record = self.repo.save_prompt_build(
+                "opportunity_research_tailor",
+                prompt,
+                job_id=job_id,
+                context_snapshot={"evaluation": record["evaluation"]},
+                status="sent_to_hermes",
+            )
+            app_run, created = self.repo.create_hermes_run_unless_active(
+                "Hermes research, tailoring, database updates, and follow-up planning.",
+                job_id=job_id,
+                prompt_id=prompt_record["id"],
+                status="queued",
+                metadata={
+                    "prompt_id": prompt_record["id"],
+                    "launch_mode": "background_thread",
+                    "session_id": f"jobapps-{job_id}",
+                },
+            )
+            if not created:
+                record = self.repo.get_job(job_id)
+                active_run = self.repo.get_agent_run(app_run["id"])
+                active_run["existing"] = True
+                record["active_run"] = active_run
+                return record
+            self.repo.record_agent_run_event(app_run["id"], "prompt_built", {"prompt_id": prompt_record["id"]})
+            updated = self.repo.record_event(
+                job_id,
+                "hermes_run_queued",
+                {
+                    "status": "hermes_queued",
+                    "prompt_id": prompt_record["id"],
+                    "app_run_id": app_run["id"],
+                },
+            )
+            active_run = self.repo.get_agent_run(app_run["id"])
+            active_run["existing"] = False
 
-        record = self.repo.get_job(job_id)
-        prompt = build_opportunity_prompt(record["job"], self.repo.career_context(), record["evaluation"])
-        prompt_record = self.repo.save_prompt_build(
-            "opportunity_research_tailor",
-            prompt,
-            job_id=job_id,
-            context_snapshot={"evaluation": record["evaluation"]},
-            status="sent_to_hermes",
-        )
-        app_run = self.repo.create_agent_run(
-            "Hermes research, tailoring, database updates, and follow-up planning.",
-            job_id=job_id,
-            kind="hermes_run",
-            prompt_id=prompt_record["id"],
-            status="queued",
-            metadata={"prompt_id": prompt_record["id"]},
-        )
-        self.repo.record_agent_run_event(app_run["id"], "prompt_built", {"prompt_id": prompt_record["id"]})
+        self._launch_in_background(job_id, app_run["id"], prompt, prompt_record["id"])
+        updated["active_run"] = active_run
+        return updated
 
+    def start_for_jobs(self, job_ids: list[str]) -> dict[str, Any]:
+        results: list[dict[str, Any]] = []
+        queued_count = 0
+        existing_count = 0
+        failed_count = 0
+        for job_id in _unique_job_ids(job_ids):
+            try:
+                record = self.start_for_job(job_id)
+                active_run = record.get("active_run") or {}
+                if active_run.get("existing"):
+                    existing_count += 1
+                else:
+                    queued_count += 1
+                results.append(
+                    {
+                        "job_id": job_id,
+                        "app_run_id": active_run.get("id", ""),
+                        "status": active_run.get("status", ""),
+                        "hermes_run_id": active_run.get("hermes_run_id", ""),
+                        "existing": bool(active_run.get("existing")),
+                    }
+                )
+            except Exception as exc:  # noqa: BLE001 - batch launch reports per-job failures.
+                failed_count += 1
+                results.append({"job_id": job_id, "status": "failed", "error": str(exc)})
+        return {
+            "requested_count": len(_unique_job_ids(job_ids)),
+            "queued_count": queued_count,
+            "existing_count": existing_count,
+            "failed_count": failed_count,
+            "results": results,
+        }
+
+    def _job_lock(self, job_id: str) -> threading.Lock:
+        with self._job_locks_guard:
+            if job_id not in self._job_locks:
+                self._job_locks[job_id] = threading.Lock()
+            return self._job_locks[job_id]
+
+    def _launch_in_background(self, job_id: str, app_run_id: str, prompt: str, prompt_id: str) -> None:
+        thread = threading.Thread(
+            target=self._launch_run,
+            args=(job_id, app_run_id, prompt, prompt_id),
+            name=f"jobapps-hermes-run-{app_run_id}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _launch_run(self, job_id: str, app_run_id: str, prompt: str, prompt_id: str) -> None:
+        session_id = f"jobapps-{job_id}"
         try:
+            self.repo.update_agent_run(app_run_id, status="starting")
+            self.repo.record_agent_run_event(app_run_id, "hermes_run_starting", {"session_id": session_id})
             response = self.hermes.start_run(
                 prompt,
                 instructions=build_chat_instructions(self.repo.dashboard(), self.toolbox.specs()),
-                session_id=f"jobapps-{job_id}",
+                session_id=session_id,
                 session_key=self.session_key,
             )
         except HermesAPIError as exc:
-            self.repo.update_agent_run(app_run["id"], status="failed", error=str(exc))
-            self.repo.record_agent_run_event(app_run["id"], "hermes_run_failed", {"error": str(exc)})
-            self.repo.record_event(job_id, "hermes_run_failed", {"status": "hermes_failed", "error": str(exc)})
-            raise
+            self._record_launch_failure(job_id, app_run_id, str(exc))
+            return
+        except Exception as exc:  # noqa: BLE001 - background thread must mark the app run visibly.
+            self._record_launch_failure(job_id, app_run_id, f"{type(exc).__name__}: {exc}")
+            return
 
         hermes_run_id = _extract_identifier(response, "run_id", "id")
         hermes_session_id = _extract_identifier(response, "session_id", "conversation_id")
-        status = _normalize_status(_extract_status(response) or "running")
-        if status not in TERMINAL_STATUSES:
-            status = "running"
+        status = _accepted_run_status(response)
 
         self.repo.update_agent_run(
-            app_run["id"],
+            app_run_id,
             status=status,
             hermes_run_id=hermes_run_id,
             hermes_session_id=hermes_session_id,
@@ -86,7 +168,7 @@ class HermesRunManager:
             },
         )
         self.repo.record_agent_run_event(
-            app_run["id"],
+            app_run_id,
             "hermes_run_started",
             {
                 "status": status,
@@ -94,21 +176,24 @@ class HermesRunManager:
                 "hermes_session_id": hermes_session_id,
             },
         )
-        updated = self.repo.record_event(
+        self.repo.record_event(
             job_id,
             "hermes_run_started",
             {
                 "status": "hermes_running" if status not in TERMINAL_STATUSES else f"hermes_{status}",
                 "hermes_run_id": hermes_run_id,
                 "hermes_session_id": hermes_session_id,
-                "prompt_id": prompt_record["id"],
-                "app_run_id": app_run["id"],
+                "prompt_id": prompt_id,
+                "app_run_id": app_run_id,
             },
         )
         if status in TERMINAL_STATUSES:
-            updated = self._record_snapshot(app_run["id"], response)
-        updated["active_run"] = self.repo.get_agent_run(app_run["id"])
-        return updated
+            self._record_snapshot(app_run_id, response)
+
+    def _record_launch_failure(self, job_id: str, app_run_id: str, error: str) -> None:
+        self.repo.update_agent_run(app_run_id, status="failed", error=error)
+        self.repo.record_agent_run_event(app_run_id, "hermes_run_failed", {"error": error})
+        self.repo.record_event(job_id, "hermes_run_failed", {"status": "hermes_failed", "error": error})
 
     def refresh_for_job(self, job_id: str) -> dict[str, Any]:
         run = self.repo.get_active_hermes_run_for_job(job_id)
@@ -342,8 +427,15 @@ def _normalize_status(value: str) -> str:
         return "completed"
     if normalized in {"canceled", "cancelled"}:
         return "cancelled"
-    if normalized in {"queued", "running", "in_progress", "requires_action", "failed", "completed", "expired"}:
+    if normalized in {"queued", "starting", "running", "in_progress", "requires_action", "failed", "completed", "expired"}:
         return normalized
+    return "running"
+
+
+def _accepted_run_status(response: dict[str, Any]) -> str:
+    status = _normalize_status(_extract_status(response) or "running")
+    if status in TERMINAL_STATUSES or status == "requires_action":
+        return status
     return "running"
 
 
@@ -447,3 +539,15 @@ def _list(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _unique_job_ids(job_ids: list[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for job_id in job_ids:
+        normalized = str(job_id or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        output.append(normalized)
+    return output
