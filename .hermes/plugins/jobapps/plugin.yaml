@@ -1,7 +1,7 @@
 name: jobapps
 version: 0.1.0
 description: Exposes Hermes JobApps database tools, context injection, and workflow skill to native Hermes sessions.
-author: JobApps maintainers
+author: Prashant Shah
 kind: standalone
 provides_tools:
   - jobapps_read_context

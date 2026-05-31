@@ -67,24 +67,6 @@ export HERMES_ENABLE_PROJECT_PLUGINS=true
 hermes plugins enable jobapps
 ```
 
-## Personalize Skills And Profile Rules
-
-The public repo ships generic JobApps skills and a generic Hermes plugin skill so
-the integration is reproducible without exposing private career patterns. Before
-using this for a real search, replace or override:
-
-- `skills/jobapps-role-evaluator/SKILL.md`
-- `skills/jobapps-application-writer/SKILL.md`
-- `skills/jobapps-outreach-operator/SKILL.md`
-- `.hermes/plugins/jobapps/skills/jobapps-cockpit/SKILL.md`
-
-Put your real target roles, work-authorization rules, writing voice, proof-point
-policy, follow-up cadence, and outreach preferences in private/local skills,
-ignored config, Hermes profile memory, or the JobApps SQLite database. Do not
-commit those personal rules to a public fork.
-
-See [docs/PERSONALIZATION.md](docs/PERSONALIZATION.md).
-
 The cockpit chat sends normal conversation to the `jobapps` profile API using
 streaming Responses events. Native Hermes slash commands such as `/help`,
 `/profile`, `/model`, and `/jobapps` route through Hermes' own command surfaces
@@ -195,8 +177,8 @@ python3 -m hermes_jobapps.importer private/profile-seed.json
 ```
 
 Non-JSON private files must include a `JOBAPPS_IMPORT_RECORDS` JSON block with
-`profile_facts` and/or `proof_points`; the app never parses legacy private seed
-files as a live schema.
+`profile_facts` and/or `proof_points`; the app never parses `knowledge_base.html`
+as a live schema.
 
 ## What Exists
 
@@ -219,4 +201,4 @@ Keep `docs/` public-safe. Local-only secrets, private profile notes, generated
 materials, and machine-specific runtime data belong in ignored config/profile
 files, not in repo documentation.
 
-See [docs/PRIVACY.md](docs/PRIVACY.md).
+See [Privacy.md](/Users/prashantshah/Desktop/Prashant/Prashant%20Gallery/Code/hermes-jobapps/Privacy.md).

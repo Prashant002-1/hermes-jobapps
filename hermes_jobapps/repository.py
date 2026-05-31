@@ -22,7 +22,28 @@ ACTION_CLOSED_SQL = "('done','closed','complete','completed','dismissed','not_ne
 ACTIVE_HERMES_RUN_STATUSES = ("queued", "starting", "running", "requires_action", "in_progress")
 ACTIVE_HERMES_RUN_SQL = "('queued','starting','running','requires_action','in_progress')"
 MATERIAL_REVIEW_APPROVAL_ACTIONS = {"review_application_materials", "review_generated_materials"}
+NON_ACTION_APPROVAL_ACTIONS = MATERIAL_REVIEW_APPROVAL_ACTIONS | {"review_outreach_draft"}
 MATERIAL_REVIEW_PROGRESS_TITLE = "Review generated resume and cover letter"
+PURPOSEFUL_ACTION_TERMS = ("send", "email", "message", "follow up", "follow-up", "follow_up", "contact")
+REVIEW_PROGRESS_KINDS = {"material_review"}
+REVIEW_PROGRESS_TERMS = ("review", "approve", "approval", "check")
+REVIEW_PROGRESS_OBJECTS = ("material", "materials", "resume", "cover", "letter", "draft", "pdf")
+JOB_STATE_BUCKETS = ("new", "applied", "skip")
+JOB_APPLIED_STATUSES = {
+    "applied",
+    "waiting",
+    "follow_up",
+    "interview",
+    "phone_screen",
+    "offer",
+    "closed",
+    "rejected",
+    "declined",
+    "archived",
+}
+JOB_SKIP_STATUSES = {"skip", "skipped", "not_interested", "not_needed"}
+MATERIAL_REVIEW_STATUSES = {"materials_ready_for_review"}
+ACTION_RESOLVED_STATUSES = set(ACTION_CLOSED_STATUSES) | {"approved", "rejected", "superseded"}
 
 
 class JobRepository:
@@ -59,7 +80,7 @@ class JobRepository:
                     url TEXT,
                     description TEXT NOT NULL,
                     user_notes TEXT,
-                    status TEXT NOT NULL DEFAULT 'evaluated',
+                    status TEXT NOT NULL DEFAULT 'new',
                     role_family TEXT,
                     decision TEXT,
                     score REAL,
@@ -639,7 +660,7 @@ class JobRepository:
                     job.get("url") or "",
                     job.get("description") or "",
                     job.get("user_notes") or "",
-                    job.get("status") or "evaluated",
+                    job.get("status") or "new",
                     evaluation.get("role_family"),
                     evaluation.get("decision"),
                     evaluation.get("score_0_to_5"),
@@ -1362,6 +1383,7 @@ class JobRepository:
         clean_status = normalize_space_for_db(status) or "open"
         clean_due_date = normalize_space_for_db(due_date)
         clean_notes = str(notes or "").strip()
+        _raise_if_review_progress_action(clean_title, clean_kind)
         title_key = normalize_action_title(clean_title)
         now = utc_now()
         item_id = uuid.uuid4().hex[:12]
@@ -2007,12 +2029,13 @@ class JobRepository:
             ).fetchall()
         jobs = [self._dashboard_job(self.get_job(job["id"])) for job in self.list_jobs()]
         followup_rows = [dict(row) for row in followups]
-        progress_rows = [dict(row) for row in progress]
-        approval_rows = [decode_approval(row) for row in approvals]
+        progress_rows = _purposeful_progress_rows([dict(row) for row in progress])
+        approval_rows = _purposeful_approval_rows([decode_approval(row) for row in approvals])
         return {
             "jobs": jobs,
             "active_job": jobs[0] if jobs else None,
             "job_count": len(jobs),
+            "job_state_counts": _job_state_counts(jobs),
             "discovery": {
                 "candidates": self.list_discovery_candidates(limit=80),
                 "counts": self.discovery_counts(),
@@ -2106,6 +2129,13 @@ class JobRepository:
         job["active_run"] = _active_hermes_run(agent_runs)
         job["hermes_run_status"] = latest_run.get("status") if latest_run else job.get("status")
         job["hermes_run_id"] = latest_run.get("hermes_run_id") if latest_run else job.get("hermes_run_id")
+        state = _dashboard_job_state(job, events, materials, progress, followups, job["approvals"])
+        job["state_bucket"] = state["bucket"]
+        job["state_label"] = state["label"]
+        job["state_dates"] = state["dates"]
+        job["last_activity_at"] = state["last_activity_at"]
+        job["open_action_count"] = state["open_action_count"]
+        job["needs_material_review"] = state["needs_material_review"]
         return job
 
     def create_approval(
@@ -2116,6 +2146,8 @@ class JobRepository:
         status: str = "pending",
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        clean_action = normalize_space_for_db(action)
+        _raise_if_review_approval_action(clean_action)
         now = utc_now()
         approval_id = uuid.uuid4().hex[:12]
         with self._connect() as conn:
@@ -2124,12 +2156,12 @@ class JobRepository:
                 INSERT INTO approvals (id, job_id, action, status, payload, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (approval_id, job_id, action, status, json.dumps(payload or {}), now, now),
+                (approval_id, job_id, clean_action, status, json.dumps(payload or {}), now, now),
             )
             self._record_brain_event_conn(
                 conn,
                 event_type="approval_requested",
-                title=action,
+                title=clean_action,
                 content=json.dumps(payload or {}, indent=2, sort_keys=True),
                 job_id=job_id,
                 entity_type="decision",
@@ -2151,6 +2183,7 @@ class JobRepository:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         clean_action = normalize_space_for_db(action)
+        _raise_if_review_approval_action(clean_action)
         incoming_payload = payload or {}
         with self._connect() as conn:
             if job_id is None:
@@ -4127,6 +4160,186 @@ def _dashboard_event(event: dict[str, Any]) -> dict[str, Any]:
         "payload": payload,
         "created_at": event.get("created_at", ""),
     }
+
+
+def _job_state_counts(jobs: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {bucket: 0 for bucket in JOB_STATE_BUCKETS}
+    for job in jobs:
+        bucket = str(job.get("state_bucket") or "new")
+        counts[bucket if bucket in counts else "new"] += 1
+    return counts
+
+
+def _dashboard_job_state(
+    job: dict[str, Any],
+    events: list[dict[str, Any]],
+    materials: list[dict[str, Any]],
+    progress: list[dict[str, Any]],
+    followups: list[dict[str, Any]],
+    approvals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    bucket = _job_state_bucket(job)
+    dates = {
+        "new": job.get("created_at") or "",
+        "applied": _latest_state_transition(events, "applied"),
+        "skip": _latest_state_transition(events, "skip"),
+        "updated": job.get("updated_at") or "",
+    }
+    if bucket == "applied" and not dates["applied"]:
+        dates["applied"] = dates["updated"] or dates["new"]
+    if bucket == "skip" and not dates["skip"]:
+        dates["skip"] = dates["updated"] or dates["new"]
+    dates["current"] = dates.get(bucket) or dates["updated"] or dates["new"]
+    return {
+        "bucket": bucket,
+        "label": {"new": "New", "applied": "Applied", "skip": "Skip"}[bucket],
+        "dates": dates,
+        "last_activity_at": _latest_timestamp(
+            [job],
+            "updated_at",
+            "created_at",
+            extra_items=[events, materials, progress, followups, approvals],
+        ),
+        "open_action_count": _open_action_count(progress, followups, approvals),
+        "needs_material_review": _needs_material_review(job, progress, approvals),
+    }
+
+
+def _job_state_bucket(job: dict[str, Any]) -> str:
+    status = str(job.get("status") or "new").strip().lower().replace("-", "_")
+    if status in JOB_SKIP_STATUSES:
+        return "skip"
+    if status in JOB_APPLIED_STATUSES:
+        return "applied"
+    return "new"
+
+
+def _needs_material_review(
+    job: dict[str, Any],
+    progress: list[dict[str, Any]],
+    approvals: list[dict[str, Any]],
+) -> bool:
+    status = str(job.get("status") or "").strip().lower()
+    if status in MATERIAL_REVIEW_STATUSES:
+        return True
+    for item in progress:
+        kind = str(item.get("kind") or "").strip().lower()
+        item_status = str(item.get("status") or "").strip().lower()
+        if kind == "material_review" and item_status not in ACTION_RESOLVED_STATUSES:
+            return True
+    for item in approvals:
+        action = str(item.get("action") or "").strip().lower()
+        item_status = str(item.get("status") or "").strip().lower()
+        if action in MATERIAL_REVIEW_APPROVAL_ACTIONS and item_status not in ACTION_RESOLVED_STATUSES:
+            return True
+    return False
+
+
+def _open_action_count(
+    progress: list[dict[str, Any]],
+    followups: list[dict[str, Any]],
+    approvals: list[dict[str, Any]],
+) -> int:
+    rows = [*_purposeful_progress_rows(progress), *followups, *_purposeful_approval_rows(approvals)]
+    return sum(1 for item in rows if str(item.get("status") or "").strip().lower() not in ACTION_RESOLVED_STATUSES)
+
+
+def _raise_if_review_progress_action(title: str, kind: str) -> None:
+    clean_kind = str(kind or "").strip().lower()
+    clean_title = str(title or "").strip()
+    title_key = normalize_action_title(clean_title)
+    if clean_kind in REVIEW_PROGRESS_KINDS or (
+        any(term in title_key for term in REVIEW_PROGRESS_TERMS)
+        and any(obj in title_key for obj in REVIEW_PROGRESS_OBJECTS)
+    ):
+        raise ValueError(
+            "Review/material-review work is not a dashboard Action. "
+            "Save material state, revisions, metadata, or events instead."
+        )
+
+
+def _raise_if_review_approval_action(action: str) -> None:
+    clean_action = str(action or "").strip().lower()
+    if clean_action.startswith("review") or clean_action in NON_ACTION_APPROVAL_ACTIONS:
+        raise ValueError(
+            "Review approvals are not dashboard Actions. "
+            "Use material metadata/events for review state; create approvals only for real external sends/actions."
+        )
+
+
+def _purposeful_progress_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if _is_purposeful_progress_action(row)]
+
+
+def _purposeful_approval_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if _is_purposeful_approval_action(row)]
+
+
+def _is_purposeful_approval_action(item: dict[str, Any]) -> bool:
+    action = str(item.get("action") or "").strip().lower()
+    if not action or action in NON_ACTION_APPROVAL_ACTIONS:
+        return False
+    text = " ".join(
+        str(part or "")
+        for part in [
+            action,
+            (item.get("payload") or {}).get("reason") if isinstance(item.get("payload"), dict) else "",
+        ]
+    ).lower()
+    return any(term in text for term in PURPOSEFUL_ACTION_TERMS)
+
+
+def _is_purposeful_progress_action(item: dict[str, Any]) -> bool:
+    kind = str(item.get("kind") or "").strip().lower()
+    text = f"{item.get('title') or ''} {item.get('notes') or ''}".lower()
+    if kind in {"material_review", "research", "application"}:
+        return False
+    if (
+        "find networking target" in text
+        or "run quick company" in text
+        or "sponsorship research" in text
+        or "outreach batch" in text
+        or text.strip().startswith("build ")
+    ):
+        return False
+    if kind == "follow_up":
+        return True
+    if kind == "networking" and any(term in text for term in PURPOSEFUL_ACTION_TERMS):
+        return True
+    return any(term in text for term in ("send follow", "send email", "email ", "message ", "contact "))
+
+
+def _latest_state_transition(events: list[dict[str, Any]], target_bucket: str) -> str:
+    dates: list[str] = []
+    for event in events:
+        payload = event.get("payload") or {}
+        bucket = _event_status_bucket(payload.get("status"))
+        if bucket == target_bucket and event.get("created_at"):
+            dates.append(str(event["created_at"]))
+    return max(dates) if dates else ""
+
+
+def _event_status_bucket(status: Any) -> str:
+    value = str(status or "").strip().lower().replace("-", "_")
+    if value in JOB_SKIP_STATUSES:
+        return "skip"
+    if value in JOB_APPLIED_STATUSES:
+        return "applied"
+    return "new"
+
+
+def _latest_timestamp(
+    items: list[dict[str, Any]],
+    *keys: str,
+    extra_items: list[list[dict[str, Any]]] | None = None,
+) -> str:
+    values: list[str] = []
+    for item in items:
+        values.extend(str(item.get(key) or "") for key in keys if item.get(key))
+    for group in extra_items or []:
+        for item in group:
+            values.extend(str(item.get(key) or "") for key in keys if item.get(key))
+    return max(values) if values else ""
 
 
 def decode_tailoring_requirement(row: sqlite3.Row) -> dict[str, Any]:

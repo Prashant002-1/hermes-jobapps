@@ -6,7 +6,7 @@ materials_path: data/materials
 
 profile:
   primary_email_env: HERMES_PROFILE_EMAIL
-  target_direction: Replace with your local target roles and role families
+  target_direction: AI Engineer focused on agentic systems, RAG, tool-use, evaluation, and applied LLM workflows
   # Optional private imports can seed the database, but they are not a schema
   # or source of truth. Keep them outside git.
   private_seed_example: private/profile-seed.html

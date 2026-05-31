@@ -322,13 +322,14 @@ class NetworkingService:
                 },
             )
             approval = self.repo.create_approval(
-                "review_outreach_draft",
+                "manual_send_outreach_email",
                 job_id=job_id,
                 payload={
                     "material_id": material["id"],
                     "contact_id": contact_id,
                     "subject": subject,
-                    "policy": "Draft created only. JobApps has no email-send tool.",
+                    "policy": "Draft created only. User must manually send from Gmail.",
+                    "reason": "Send the prepared outreach email from the Gmail draft.",
                 },
             )
         return {

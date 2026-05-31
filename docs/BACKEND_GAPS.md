@@ -103,7 +103,7 @@ The frontend can poll `GET /api/jobs/:id/hermes-run` for status after `started_h
 
 Every Hermes chat fallback and long-running Hermes run now injects:
 - Current active job (if any) — title, company, description, current blocker decision
-- Profile summary — target role, configured constraints, proof points count
+- Profile summary — target role, constraints (F-1/OPT), proof points count
 - Tailoring lifecycle counts — application signals, tailoring requirements, portrayal decisions, learning patterns
 - Available tools — list of `jobapps_*` tools with descriptions
 

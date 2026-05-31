@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
 from typing import Any
 
 from .latex import build_cover_letter_tex, build_resume_tex, job_material_filename, write_material_artifact
@@ -150,42 +149,10 @@ class JobAppsWorkflow:
                 )
 
     def _create_default_progress(self, job_id: str, evaluation: dict[str, Any], run_id: str) -> None:
-        job = self.repo.get_job(job_id)["job"]
-        resume_filename = job_material_filename(job, "resume_tailoring", "tex")
-        cover_filename = job_material_filename(job, "cover_letter", "tex")
-        items = [
-            ("Run quick company and sponsorship research", "research"),
-            (f"Review {resume_filename}", "material_review"),
-            (f"Review {cover_filename}", "material_review"),
-            ("Find networking targets", "networking"),
-        ]
-        for title, kind in items:
-            self.toolbox.execute(
-                "jobapps_create_progress_item",
-                {"job_id": job_id, "title": title, "kind": kind, "status": "open"},
-                run_id=run_id,
-            )
-        if evaluation.get("decision") == "apply":
-            due = (date.today() + timedelta(days=5)).isoformat()
-            self.toolbox.execute(
-                "jobapps_create_followup",
-                {
-                    "job_id": job_id,
-                    "due_date": due,
-                    "reason": "Check application/networking next action.",
-                    "status": "open",
-                },
-                run_id=run_id,
-            )
-            self.toolbox.execute(
-                "jobapps_request_approval",
-                {
-                    "job_id": job_id,
-                    "action": "review_generated_materials",
-                    "payload": {
-                        "materials": [resume_filename, cover_filename],
-                        "reason": "Local prep generated reviewable LaTeX drafts. No external use until approved.",
-                    },
-                },
-                run_id=run_id,
-            )
+        """Material preparation records artifacts/state only; it must not create dashboard Actions.
+
+        Actions are reserved for real external work such as sending an outreach email or a
+        due networking follow-up. Research, material review, generic submission reminders,
+        and other obvious workflow steps stay in materials, events, notes, and job state.
+        """
+        return None

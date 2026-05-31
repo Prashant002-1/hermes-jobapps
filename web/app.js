@@ -101,7 +101,7 @@ let jobsMessageTimer = null;
 let pipelineMessage = "";
 let pipelineMessageKind = "";
 let pipelineMessageTimer = null;
-const pipelineExpanded = { applied: false, waiting: false, closed: false };
+const pipelineExpanded = { applied: false, skip: false };
 
 /* ── Helpers ── */
 const esc = (s) => {
@@ -139,6 +139,20 @@ const fetchJsonStrict = async (url) => {
   return payload;
 };
 
+const copyText = async (text) => {
+  const value = String(text || "");
+  if (!value) return false;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  if (composerInput) {
+    composerInput.value = value;
+    autoResize();
+  }
+  return false;
+};
+
 const setTip = (el, text) => {
   if (!el || !text) return el;
   el.title = text;
@@ -159,14 +173,14 @@ const fmtDate = (iso) => {
   if (!iso) return "";
   const d = displayDate(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 };
 
 const fmtDateTime = (value) => {
   if (!value) return "";
   const d = typeof value === "number" ? new Date(value * 1000) : new Date(value);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return d.toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 };
 
 const fmtAge = (seconds) => {
@@ -368,29 +382,54 @@ const scrollCurrentViewToTop = () => {
 const humanize = (value) => String(value || "").replace(/_/g, " ");
 const jobDecision = (job) => job?.decision || job?.evaluation?.decision || "pending";
 const jobMaterials = (job) => job?.materials_workbench?.items || [];
-const CLOSED_ACTION_STATUSES = new Set(["done", "closed", "complete", "completed", "dismissed", "not_needed", "canceled", "cancelled", "approved", "rejected"]);
-const ACTION_ACTIVE_LANES = new Set(["do_now", "review", "state", "hermes"]);
+const CLOSED_ACTION_STATUSES = new Set(["done", "closed", "complete", "completed", "dismissed", "not_needed", "canceled", "cancelled", "approved", "rejected", "superseded"]);
+const ACTION_ACTIVE_LANES = new Set(["do_now", "state", "hermes"]);
 const ACTION_LANES = [
   { id: "do_now", label: "Do Now" },
-  { id: "review", label: "Review" },
   { id: "state", label: "State" },
   { id: "hermes", label: "Hermes" },
   { id: "backlog", label: "Backlog" },
 ];
 const openItems = (items = []) => items.filter((item) => !CLOSED_ACTION_STATUSES.has(String(item.status || "").toLowerCase()));
-const PIPELINE_LIMITED_STAGES = new Set(["applied", "waiting", "closed"]);
+const PIPELINE_LIMITED_STAGES = new Set(["applied", "skip"]);
 const PIPELINE_PREVIEW_LIMIT = 10;
 const JOB_STATUS_OPTIONS = [
-  { stage: "inbox", status: "new", label: "Inbox" },
-  { stage: "preparing", status: "preparing", label: "Preparing" },
-  { stage: "ready", status: "ready_to_apply", label: "Ready" },
+  { stage: "new", status: "new", label: "New" },
   { stage: "applied", status: "applied", label: "Applied" },
-  { stage: "waiting", status: "waiting", label: "Waiting" },
-  { stage: "closed", status: "closed", label: "Closed" },
+  { stage: "skip", status: "skip", label: "Skip" },
 ];
 const STATUS_BY_STAGE = Object.fromEntries(JOB_STATUS_OPTIONS.map((item) => [item.stage, item.status]));
 const STATUS_LABELS = Object.fromEntries(JOB_STATUS_OPTIONS.map((item) => [item.status, item.label]));
 const COCKPIT_JOB_STATUSES = new Set(JOB_STATUS_OPTIONS.map((item) => item.status));
+const LEGACY_JOB_STATUSES = new Set([
+  "evaluated",
+  "saved",
+  "hydrated",
+  "needs_review",
+  "preparing",
+  "ready",
+  "ready_to_apply",
+  "approved",
+  "materials_ready",
+  "materials_ready_for_upload",
+  "materials_ready_networking_drafts_created",
+  "referral_draft_ready",
+  "pending_referral_upload",
+  "materials_ready_for_review",
+  "waiting",
+  "follow_up",
+  "interview",
+  "phone_screen",
+  "offer",
+  "closed",
+  "rejected",
+  "declined",
+  "archived",
+  "hermes_queued",
+  "hermes_running",
+  "hermes_completed",
+  "hermes_failed",
+]);
 
 const localDateKey = (date = new Date()) => {
   const year = date.getFullYear();
@@ -422,26 +461,67 @@ const actionDueText = (value, fallback = "") => {
 const actionLaneLabel = (lane) => (ACTION_LANES.find((item) => item.id === lane)?.label || humanize(lane));
 const findJobById = (jobId) => (appState?.jobs || []).find((job) => job.id === jobId);
 
+const stateLabel = (stage) => {
+  if (stage === "applied") return "Applied";
+  if (stage === "skip") return "Skip";
+  return "New";
+};
+
+const jobEventDate = (job, predicate) => {
+  const events = (job?.events || [])
+    .filter(predicate)
+    .map((event) => event.created_at)
+    .filter(Boolean)
+    .sort();
+  return events[events.length - 1] || "";
+};
+
+const jobStateDate = (job, stage = jobStage(job)) => {
+  if (!job) return "";
+  const dates = job.state_dates || {};
+  if (dates.current) return dates.current;
+  if (stage === "applied" && dates.applied) return dates.applied;
+  if (stage === "skip" && dates.skip) return dates.skip;
+  if (stage === "new" && dates.new) return dates.new;
+  if (stage === "applied") {
+    return jobEventDate(job, (event) => event.payload?.status === "applied" || /applied|submitted/i.test(event.summary || event.note || "")) || job.updated_at || job.created_at;
+  }
+  if (stage === "skip") {
+    return jobEventDate(job, (event) => ["skip", "skipped", "not_interested", "not_needed"].includes(String(event.payload?.status || "").toLowerCase())) || job.updated_at || job.created_at;
+  }
+  return job.created_at || job.updated_at || "";
+};
+
+const jobDateMeta = (job, stage = jobStage(job)) => {
+  const created = fmtDate(job?.created_at);
+  const updated = fmtDate(job?.updated_at);
+  const stateDate = fmtDate(jobStateDate(job, stage));
+  const parts = [];
+  if (created) parts.push(`added ${created}`);
+  if (updated && updated !== created) parts.push(`updated ${updated}`);
+  if (stateDate && stage !== "new") parts.push(`${stateLabel(stage).toLowerCase()} ${stateDate}`);
+  return parts.join(" · ");
+};
+
+const jobOpenActionCount = (job = {}) => (
+  Number.isFinite(Number(job.open_action_count)) ? Number(job.open_action_count) :
+  openItems(job.progress || []).length +
+  openItems(job.followups || []).length +
+  (job.approvals || []).filter((item) => !CLOSED_ACTION_STATUSES.has(String(item.status || "").toLowerCase())).length
+);
+
 const jobStage = (job) => {
-  const decision = jobDecision(job);
-  const status = String(job.status || "new").toLowerCase();
-  const materials = jobMaterials(job);
-  const followups = openItems(job.followups || []);
-  if (["rejected", "declined", "closed", "archived"].includes(status)) return "closed";
-  if (["interview", "phone_screen", "offer", "follow_up", "waiting"].includes(status)) return "waiting";
-  if (status === "applied") return "applied";
-  if (["ready_to_apply", "ready"].includes(status)) return "ready";
-  if (status === "preparing") return "preparing";
-  if (followups.length) return "waiting";
-  if (decision === "skip") return "closed";
-  if (["new", "saved", "hydrated", "needs_review"].includes(status)) return "inbox";
-  if (decision === "apply" || materials.length || (job.tailoring_requirements || []).length) return "preparing";
-  return "inbox";
+  const bucket = String(job?.state_bucket || "").toLowerCase();
+  if (["new", "applied", "skip"].includes(bucket)) return bucket;
+  const status = String(job?.status || "new").toLowerCase().replace(/-/g, "_");
+  if (["skip", "skipped", "not_interested", "not_needed"].includes(status)) return "skip";
+  if (["applied", "interview", "phone_screen", "offer", "follow_up", "waiting", "closed", "rejected", "declined", "archived"].includes(status)) return "applied";
+  return "new";
 };
 
 const dashboardCurrentJob = (jobs = []) => (
-  jobs.find((job) => jobStage(job) === "ready") ||
-  jobs.find((job) => jobStage(job) !== "closed") ||
+  jobs.find((job) => jobStage(job) === "new") ||
+  jobs.find((job) => jobStage(job) === "applied") ||
   jobs[0] ||
   null
 );
@@ -454,9 +534,6 @@ const actionContext = (item = {}) => (
 
 const approvalActionTitle = (action) => {
   const normalized = String(action || "");
-  if (normalized === "review_generated_materials") return "Review generated materials";
-  if (normalized === "review_application_materials") return "Review application materials";
-  if (normalized === "review_outreach_draft") return "Review outreach draft";
   if (normalized.startsWith("manual_send_")) return `Send ${humanize(normalized.replace(/^manual_send_/, ""))}`;
   return humanize(normalized || "approval");
 };
@@ -469,7 +546,7 @@ const actionPromptFor = (item, kind) => {
   return `Help me decide the next JobApps step for: ${title}. Context: ${context}.`;
 };
 
-const isExternalAction = (text) => /(send|submit|apply|email|message|follow[\s-]?up)/i.test(text || "");
+const isExternalAction = (text) => /(send|email|message|contact|follow[\s-]?up)/i.test(text || "");
 const isReviewAction = (text) => /(review|approve|materials|resume|cover|draft|pdf)/i.test(text || "");
 const isGenericWorkflowHint = (item = {}) => {
   const text = `${item.title || ""} ${item.kind || ""}`.toLowerCase();
@@ -483,8 +560,8 @@ const isGenericWorkflowHint = (item = {}) => {
 const classifyProgressAction = (item) => {
   const text = `${item.title || ""} ${item.kind || ""}`;
   if (isGenericWorkflowHint(item)) return "backlog";
-  if (isExternalAction(text) || ["application", "follow_up"].includes(String(item.kind || ""))) return "do_now";
-  if (String(item.kind || "") === "material_review" || isReviewAction(text)) return "review";
+  if (isReviewAction(text)) return "backlog";
+  if (isExternalAction(text) || ["follow_up"].includes(String(item.kind || ""))) return "do_now";
   if (/(research|sponsorship|networking|find)/i.test(text)) return "hermes";
   return item.due_date ? "do_now" : "backlog";
 };
@@ -493,9 +570,8 @@ const actionUrgency = (row) => {
   if (isPastDate(row.dueKey)) return 0;
   if (isTodayDate(row.dueKey)) return 1;
   if (row.lane === "do_now") return 2;
-  if (row.lane === "review") return 3;
-  if (row.lane === "state") return 4;
-  if (row.lane === "hermes") return 5;
+  if (row.lane === "state") return 3;
+  if (row.lane === "hermes") return 4;
   return 6;
 };
 
@@ -512,7 +588,7 @@ const buildActionRows = () => {
     const action = String(item.action || "");
     const payload = item.payload || {};
     const title = approvalActionTitle(action);
-    const lane = isReviewAction(action) ? "review" : isExternalAction(action) ? "do_now" : "review";
+    const lane = isExternalAction(action) ? "do_now" : "backlog";
     rows.push({
       id: `approval-${item.id}`,
       itemId: item.id,
@@ -568,7 +644,7 @@ const buildActionRows = () => {
   }));
   (appState?.jobs || []).forEach((job) => {
     const status = String(job.status || "new").toLowerCase();
-    if (!COCKPIT_JOB_STATUSES.has(status) && !CLOSED_ACTION_STATUSES.has(status)) {
+    if (!COCKPIT_JOB_STATUSES.has(status) && !LEGACY_JOB_STATUSES.has(status) && !CLOSED_ACTION_STATUSES.has(status)) {
       rows.push({
         id: `state-${job.id}`,
         itemId: job.id,
@@ -624,7 +700,7 @@ const renderStateFocus = (job, queueRows) => {
       <p>Add a job link or paste a description to start the workflow.</p>
       <div class="state-actions">
         <button class="btn btn-primary" type="button" data-state-view="discovery">Find Jobs</button>
-        <button class="btn" type="button" data-state-view="chat">Paste JD</button>
+        <button class="btn" type="button" data-state-view="jobs">Review Jobs</button>
       </div>
     `;
     return;
@@ -635,23 +711,30 @@ const renderStateFocus = (job, queueRows) => {
   const materials = jobMaterials(job);
   const contacts = job.outreach?.contacts || job.contacts || [];
   const followups = openItems(job.outreach?.followups || job.followups || []);
+  const stage = jobStage(job);
+  const actionCount = jobOpenActionCount(job);
   focus.innerHTML = `
     <div class="state-focus-head">
       <span class="eyebrow">Current Job</span>
-      <span class="badge badge-${classToken(decision, ["apply", "skip", "pending"])}">${esc(decision)}</span>
+      <span class="state-pill state-${esc(stage)}">${esc(stateLabel(stage))}</span>
     </div>
     <h2>${esc(job.title || "untitled")}</h2>
     <p>${esc([job.company, job.location].filter(Boolean).join(" · ") || "company pending")}</p>
+    <div class="job-packet-dates">
+      <span>${esc(jobDateMeta(job, stage) || "date pending")}</span>
+      <span class="badge badge-${classToken(decision, ["apply", "skip", "pending"])}">${esc(decision)}</span>
+    </div>
     <div class="next-action-box">
       <span>Next Action</span>
       <strong>${esc(job.next_action || (queueRows.length ? queueRows[0].title : "Prepare the role, review materials, then decide the next move."))}</strong>
     </div>
     <div class="state-metrics">
+      <span><strong>${fmtNum(actionCount)}</strong> actions</span>
       <span><strong>${fmtNum(requirements.length)}</strong> requirements</span>
       <span><strong>${fmtNum(signals.length)}</strong> signals</span>
       <span><strong>${fmtNum(materials.length)}</strong> materials</span>
       <span><strong>${fmtNum(contacts.length)}</strong> people</span>
-      <span><strong>${fmtNum(followups.length)}</strong> follow-ups</span>
+      ${followups.length ? `<span><strong>${fmtNum(followups.length)}</strong> follow-ups</span>` : ""}
     </div>
     <div class="state-actions">
       <button class="btn btn-primary" type="button" data-state-view="jobs" data-state-job="${esc(job.id)}">Open Job</button>
@@ -726,7 +809,7 @@ const actionDispositionButtons = (row, options = {}) => {
   }
   const laterLabel = row.lane === "backlog" ? "Do Later" : "Snooze";
   return `
-    ${row.prompt ? `<button class="link-button" type="button" data-action-prompt="${esc(row.prompt)}">Open with Hermes</button>` : ""}
+    ${row.prompt ? `<button class="link-button" type="button" data-action-prompt="${esc(row.prompt)}">Copy Hermes Prompt</button>` : ""}
     ${showOpenJob && row.jobId ? `<button class="link-button" type="button" data-action-open-job="${esc(row.jobId)}">Open Job</button>` : ""}
     <button class="btn btn-primary" type="button" data-action-op="done" data-action-source="${esc(row.sourceType)}" data-action-id="${esc(row.itemId)}">${esc(actionButtonLabel(row))}</button>
     <button class="btn" type="button" data-action-op="snooze" data-action-days="${row.lane === "backlog" ? "7" : "3"}" data-action-source="${esc(row.sourceType)}" data-action-id="${esc(row.itemId)}">${laterLabel}</button>
@@ -882,14 +965,10 @@ const renderActions = () => {
   const summary = actionSummary(rows);
   if (actionsStats) {
     actionsStats.innerHTML = [
-      ["Total", summary.total],
       ["Jobs", summary.jobs],
       ["Active", summary.active],
       ["Overdue", summary.overdue],
       ["Today", summary.today],
-      ["Approvals", summary.approvals],
-      ["Follow-ups", summary.followups],
-      ["Backlog", summary.backlog],
     ].map(([label, value]) => `
       <div class="stat-item">
         <span class="stat-value">${fmtNum(value)}</span>
@@ -958,14 +1037,10 @@ const attachActionControls = (root = document) => {
     });
   });
   root.querySelectorAll("[data-action-prompt]").forEach((button) => {
-    button.addEventListener("click", () => {
+    button.addEventListener("click", async () => {
       const prompt = button.dataset.actionPrompt || "";
-      if (composerInput) {
-        composerInput.value = prompt;
-        autoResize();
-      }
-      switchView("chat");
-      composerInput?.focus();
+      const copied = await copyText(prompt);
+      setActionsMessage(copied ? "prompt copied for Hermes TUI" : "prompt placed in chat draft", copied ? "ok" : "pending");
     });
   });
   root.querySelectorAll("[data-preview-material]").forEach((button) => {
@@ -980,8 +1055,8 @@ const statusSelectMarkup = (job, className = "") => {
   const value = currentJobStatusValue(job);
   return `
     <label class="status-menu ${esc(className)}">
-      <span>Status</span>
-      <select data-job-status="${esc(job.id)}" aria-label="Update status for ${esc(job.title || "job")}">
+      <span>State</span>
+      <select data-job-status="${esc(job.id)}" aria-label="Update state for ${esc(job.title || "job")}">
         ${JOB_STATUS_OPTIONS.map((item) => `
           <option value="${esc(item.status)}"${item.status === value ? " selected" : ""}>${esc(item.label)}</option>
         `).join("")}
@@ -1063,17 +1138,25 @@ const attachJobStatusControls = (root = document) => {
 
 const renderPipelineCard = (job) => {
   const card = document.createElement("div");
-  card.className = "pipe-card";
+  const stage = jobStage(job);
+  const actionCount = jobOpenActionCount(job);
+  card.className = `pipe-card state-${stage}`;
   card.draggable = true;
   card.dataset.jobId = job.id;
   const decision = jobDecision(job);
   const materials = jobMaterials(job);
   const contacts = job.outreach?.contacts || job.contacts || [];
   card.innerHTML = `
+    <div class="pipe-card-top">
+      <span class="state-pill state-${esc(stage)}">${esc(stateLabel(stage))}</span>
+      <time>${esc(fmtDate(jobStateDate(job, stage)) || "")}</time>
+    </div>
     <div class="pipe-card-title">${esc(job.title || "untitled")}</div>
     <div class="pipe-card-company">${esc(job.company || "")}</div>
+    <div class="pipe-card-date">${esc(jobDateMeta(job, stage) || "date pending")}</div>
     <div class="pipe-card-meta">
       <span class="badge badge-${classToken(decision, ["apply", "skip", "pending"])}">${esc(decision)}</span>
+      <span>${fmtNum(actionCount)} actions</span>
       <span>${fmtNum(materials.length)} files</span>
       <span>${fmtNum(contacts.length)} people</span>
     </div>
@@ -1124,15 +1207,19 @@ const renderDashboard = () => {
   const jobs = appState.jobs || [];
   const counts = appState.context_counts || {};
   const materialCount = jobs.reduce((total, job) => total + (job.materials_workbench?.items?.length || 0), 0);
-  const contactCount = appState.contacts?.length || counts.contacts || 0;
   const queueRows = dashboardQueue();
   const active = dashboardCurrentJob(jobs);
+  const stateCounts = {
+    new: jobs.filter((job) => jobStage(job) === "new").length,
+    applied: jobs.filter((job) => jobStage(job) === "applied").length,
+    skip: jobs.filter((job) => jobStage(job) === "skip").length,
+  };
 
   // Stats
-  setText("#statJobs", jobs.length);
-  setText("#statNeedsAction", queueRows.length);
-  setText("#statMaterials", materialCount);
-  setText("#statPeople", contactCount);
+  setText("#statJobs", stateCounts.new);
+  setText("#statNeedsAction", stateCounts.applied);
+  setText("#statMaterials", stateCounts.skip);
+  setText("#statPeople", queueRows.length);
   setText("#routeJobs", jobs.length);
   setText("#routeSignals", counts.application_signals || 0);
   setText("#routeEvidence", counts.proof_points || 0);
@@ -1142,7 +1229,7 @@ const renderDashboard = () => {
   setText("#opsSignals", counts.application_signals || 0);
   setText("#opsEvidence", counts.proof_points || 0);
   setText("#opsMaterials", materialCount);
-  setText("#pipelineWip", `${fmtNum(jobs.filter((job) => !["closed"].includes(jobStage(job))).length)} active`);
+  setText("#pipelineWip", `${fmtNum(stateCounts.new)} new`);
 
   renderStateFocus(active, queueRows);
   renderStateQueue(queueRows);
@@ -1158,12 +1245,9 @@ const renderDashboard = () => {
 
   // Pipeline
   const columns = {
-    inbox: $("#pipeNew"),
-    preparing: $("#pipePrep"),
-    ready: $("#pipeReady"),
+    new: $("#pipeNew"),
     applied: $("#pipeApplied"),
-    waiting: $("#pipeWaiting"),
-    closed: $("#pipeClosed"),
+    skip: $("#pipeSkip"),
   };
   const stageCounts = Object.fromEntries(Object.keys(columns).map((key) => [key, 0]));
   Object.values(columns).forEach((el) => {
@@ -1202,12 +1286,9 @@ const renderDashboard = () => {
       el.innerHTML = '<div class="empty-state">empty</div>';
     }
   });
-  setText("#pipeInboxCount", stageCounts.inbox);
-  setText("#pipePrepCount", stageCounts.preparing);
-  setText("#pipeReadyCount", stageCounts.ready);
+  setText("#pipeInboxCount", stageCounts.new);
   setText("#pipeAppliedCount", stageCounts.applied);
-  setText("#pipeWaitingCount", stageCounts.waiting);
-  setText("#pipeClosedCount", stageCounts.closed);
+  setText("#pipeSkipCount", stageCounts.skip);
   const message = $("#pipelineMessage");
   if (message) {
     message.textContent = pipelineMessage;
@@ -1544,8 +1625,8 @@ const renderLeadCard = (item) => {
     const discuss = document.createElement("button");
     discuss.type = "button";
     discuss.className = "link-button";
-    discuss.textContent = "Ask Hermes";
-    setTip(discuss, "Open chat with this lead preloaded so Hermes can inspect blockers or next steps. Nothing is submitted.");
+    discuss.textContent = "Copy Prompt";
+    setTip(discuss, "Copy a native Hermes prompt for blocker inspection or next steps. Nothing is submitted.");
     discuss.addEventListener("click", () => askHermesAboutDiscovery(item));
     actions.appendChild(discuss);
     card.appendChild(actions);
@@ -1652,7 +1733,7 @@ const updateDiscoveryCandidateStatus = async (candidateId, status) => {
 };
 
 const askHermesAboutDiscovery = (item) => {
-  composerInput.value = [
+  const prompt = [
     "Review this discovered role before I spend time on it.",
     `Candidate id: ${item.id}`,
     `Role: ${item.title || "untitled"} at ${item.company || "unknown company"}`,
@@ -1662,10 +1743,9 @@ const askHermesAboutDiscovery = (item) => {
     item.application_form_summary ? `Application form: ${item.application_form_summary}` : "",
     "Tell me whether the blocker preflight is enough or what source I should check next.",
   ].filter(Boolean).join("\n");
-  autoResize();
-  switchView("chat");
-  composerInput.focus();
-  saveChatState();
+  copyText(prompt)
+    .then((copied) => setDiscoveryMessage(copied ? "prompt copied for Hermes TUI" : "prompt placed in chat draft", copied ? "ok" : ""))
+    .catch((err) => setDiscoveryMessage(err.message || "copy failed", "error"));
 };
 
 /* ── Jobs ── */
@@ -1689,6 +1769,7 @@ const initJobsFilters = () => {
 
 const selectedJob = () => {
   const jobs = appState?.jobs || [];
+  if (currentView === "jobs" && !currentJobId) return null;
   return jobs.find((j) => j.id === currentJobId) || jobs[0] || null;
 };
 
@@ -1777,45 +1858,77 @@ const renderJobs = () => {
   let jobs = appState.jobs || [];
   if (!currentJobId && jobs.length) currentJobId = jobs[0].id;
   if (jobsFilter !== "all") {
-    jobs = jobs.filter((j) => {
-      const d = j.decision || j.evaluation?.decision || "pending";
-      return d === jobsFilter;
-    });
+    jobs = jobs.filter((j) => jobStage(j) === jobsFilter);
   }
   if (jobsQuery) {
     jobs = jobs.filter((j) =>
       (j.title || "").toLowerCase().includes(jobsQuery) ||
-      (j.company || "").toLowerCase().includes(jobsQuery)
+      (j.company || "").toLowerCase().includes(jobsQuery) ||
+      (j.location || "").toLowerCase().includes(jobsQuery) ||
+      (j.status || "").toLowerCase().includes(jobsQuery)
     );
+  }
+  if (jobs.length && !jobs.some((j) => j.id === currentJobId)) {
+    currentJobId = jobs[0].id;
   }
 
   if (!jobs.length) {
+    currentJobId = null;
     list.innerHTML = '<div class="empty-state">empty</div>';
     renderJobDetail();
     return;
   }
 
-  jobs.forEach((j) => {
-    const decision = j.decision || j.evaluation?.decision || "pending";
-    const activeRun = jobActiveRun(j);
-    const row = document.createElement("div");
-    row.className = `job-row${j.id === currentJobId ? " active" : ""}`;
-    row.innerHTML = `
-      <div class="job-row-info">
-        <div class="job-row-title">${esc(j.title || "untitled")}</div>
-        <div class="job-row-company">${esc(j.company || "")}</div>
+  const sections = JOB_STATUS_OPTIONS
+    .map((option) => ({
+      ...option,
+      jobs: jobs.filter((job) => jobStage(job) === option.stage),
+    }))
+    .filter((section) => section.jobs.length || jobsFilter === section.stage);
+
+  sections.forEach((section) => {
+    const sectionEl = document.createElement("section");
+    sectionEl.className = "job-list-section";
+    sectionEl.innerHTML = `
+      <div class="job-list-section-head">
+        <span>${esc(section.label)}</span>
+        <strong>${fmtNum(section.jobs.length)}</strong>
       </div>
-      <div class="job-row-status">${esc(activeRun ? `run ${humanize(activeRun.status || "active")}` : (j.status || "new"))}</div>
-      <div class="job-row-date">${fmtDate(j.created_at)}</div>
-      <span class="badge badge-${classToken(decision, ["apply", "skip", "pending"])}">${esc(decision)}</span>
+      <div class="job-list-section-body"></div>
     `;
-    row.addEventListener("click", () => {
-      currentJobId = j.id;
-      renderJobs();
-      renderJobDetail();
-      saveChatState();
+    const body = sectionEl.querySelector(".job-list-section-body");
+    if (!section.jobs.length) {
+      body.innerHTML = '<div class="empty-state">empty</div>';
+    }
+    section.jobs.forEach((j) => {
+      const stage = jobStage(j);
+      const decision = j.decision || j.evaluation?.decision || "pending";
+      const activeRun = jobActiveRun(j);
+      const actionCount = jobOpenActionCount(j);
+      const row = document.createElement("div");
+      row.className = `job-row state-${stage}${j.id === currentJobId ? " active" : ""}`;
+      row.innerHTML = `
+        <div class="job-row-info">
+          <div class="job-row-title">${esc(j.title || "untitled")}</div>
+          <div class="job-row-company">${esc([j.company, j.location].filter(Boolean).join(" · "))}</div>
+          <div class="job-row-date">${esc(jobDateMeta(j, stage) || "date pending")}</div>
+        </div>
+        <div class="job-row-meta">
+          <span class="state-pill state-${esc(stage)}">${esc(stateLabel(stage))}</span>
+          <span class="badge badge-${classToken(decision, ["apply", "skip", "pending"])}">${esc(decision)}</span>
+          ${activeRun ? `<span class="job-row-run">run ${esc(humanize(activeRun.status || "active"))}</span>` : ""}
+          <span class="job-row-actions">${fmtNum(actionCount)} actions</span>
+        </div>
+      `;
+      row.addEventListener("click", () => {
+        currentJobId = j.id;
+        renderJobs();
+        renderJobDetail();
+        saveChatState();
+      });
+      body.appendChild(row);
     });
-    list.appendChild(row);
+    list.appendChild(sectionEl);
   });
   renderJobDetail();
 };
@@ -1850,6 +1963,8 @@ const renderJobDetail = () => {
   const jobUrl = safeHref(job.url || job.apply_url || "");
   const activeRun = jobActiveRun(job);
   const runStatus = activeRun?.status || job.hermes_run_status || "";
+  const actionCount = jobOpenActionCount(job);
+  const dateMeta = jobDateMeta(job, stage);
   const runActionMarkup = activeRun
     ? `
       <span class="badge">run: ${esc(humanize(runStatus || "active"))}</span>
@@ -1858,16 +1973,6 @@ const renderJobDetail = () => {
     : `
       <button class="link-button" type="button" data-start-hermes-run="${esc(job.id)}">Start Prep</button>
     `;
-  const stateSteps = [
-    ["inbox", "Preflight"],
-    ["preparing", "Tailor"],
-    ["ready", "Ready"],
-    ["applied", "Applied"],
-    ["waiting", "Waiting"],
-    ["closed", "Closed"],
-  ];
-  const stageIndex = Math.max(0, stateSteps.findIndex(([key]) => key === stage));
-
   const materialRows = materials.length ? materials.map((item) => {
     const name = materialUserName(item);
     const meta = materialMetaText(item);
@@ -1981,10 +2086,14 @@ const renderJobDetail = () => {
       <span class="eyebrow">Job detail</span>
       <h2>${esc(job.title || "untitled")}</h2>
       <p>${esc([job.company, job.location].filter(Boolean).join(" · "))}</p>
+      <div class="job-packet-dates">
+        <span>${esc(dateMeta || "date pending")}</span>
+        ${job.id ? `<span>${esc(job.id)}</span>` : ""}
+      </div>
       <div class="job-detail-badges">
-        <span class="badge">status: ${esc(humanize(job.status || "new"))}</span>
+        <span class="state-pill state-${esc(stage)}">${esc(stateLabel(stage))}</span>
         <span class="badge badge-${classToken(decision, ["apply", "skip", "pending"])}">decision: ${esc(decision)}</span>
-        <span class="badge">stage: ${esc(humanize(stage))}</span>
+        ${job.status && job.status !== currentJobStatusValue(job) ? `<span class="badge">stored: ${esc(humanize(job.status))}</span>` : ""}
       </div>
       <div class="job-status-toolbar">
         ${statusSelectMarkup(job, "detail-status-menu")}
@@ -1992,18 +2101,8 @@ const renderJobDetail = () => {
       </div>
       ${jobUrl ? `<a class="link-button material-link" href="${esc(jobUrl)}" target="_blank" rel="noopener">Open posting</a>` : ""}
     </div>
-    <div class="job-state-path">
-      ${stateSteps.map(([key, label], index) => `
-        <button
-          type="button"
-          class="${index < stageIndex ? "done" : index === stageIndex ? "current" : ""}"
-          data-job-id="${esc(job.id)}"
-          data-job-stage="${esc(key)}"
-          data-job-set-status="${esc(STATUS_BY_STAGE[key] || "new")}"
-        >${esc(label)}</button>
-      `).join("")}
-    </div>
     <div class="job-detail-metrics">
+      <span><strong>${fmtNum(actionCount)}</strong> actions</span>
       <span><strong>${fmtNum(requirements.length)}</strong> requirements</span>
       <span><strong>${fmtNum(signals.length)}</strong> signals</span>
       <span><strong>${fmtNum(materials.length)}</strong> materials</span>
@@ -2024,31 +2123,36 @@ const renderJobDetail = () => {
         ${progressRows}
       </section>
       <section class="job-detail-section wide">
-        <h3>Tailoring Requirements</h3>
-        ${requirementRows}
-      </section>
-      <section class="job-detail-section wide">
-        <h3>Job Signals</h3>
-        ${signalRows}
-      </section>
-      <section class="job-detail-section wide">
-        <h3>Portrayal Decisions</h3>
-        ${decisionRows}
-      </section>
-      <section class="job-detail-section wide">
         <h3>Materials</h3>
         ${materialRows}
       </section>
-      <section class="job-detail-section wide">
+      <details class="job-detail-section wide detail-disclosure">
+        <summary><span>Tailoring Requirements</span><strong>${fmtNum(requirements.length)}</strong></summary>
+        <h3>Tailoring Requirements</h3>
+        ${requirementRows}
+      </details>
+      <details class="job-detail-section wide detail-disclosure">
+        <summary><span>Job Signals</span><strong>${fmtNum(signals.length)}</strong></summary>
+        <h3>Job Signals</h3>
+        ${signalRows}
+      </details>
+      <details class="job-detail-section wide detail-disclosure">
+        <summary><span>Portrayal Decisions</span><strong>${fmtNum(decisions.length)}</strong></summary>
+        <h3>Portrayal Decisions</h3>
+        ${decisionRows}
+      </details>
+      <details class="job-detail-section wide detail-disclosure">
+        <summary><span>Network</span><strong>${fmtNum(contacts.length + drafts.length + followups.length)}</strong></summary>
         <h3>Network</h3>
         ${draftRows}
         <h4>People</h4>
         ${contactRows}
-      </section>
-      <section class="job-detail-section wide">
+      </details>
+      <details class="job-detail-section wide detail-disclosure">
+        <summary><span>Follow-ups</span><strong>${fmtNum(followups.length)}</strong></summary>
         <h3>Follow-ups</h3>
         ${followupRows}
-      </section>
+      </details>
     </div>
   `;
   jobDetailPanel.querySelectorAll("[data-compile-material]").forEach((button) => {
@@ -2283,10 +2387,10 @@ const renderNetworkItem = (item) => {
   const ask = document.createElement("button");
   ask.type = "button";
   ask.className = "link-button";
-  ask.textContent = "Plan";
-  setTip(ask, "Open chat with this contact preloaded so Hermes can suggest the next networking move. Nothing is sent.");
-  ask.addEventListener("click", () => {
-    composerInput.value = [
+  ask.textContent = "Copy Prompt";
+  setTip(ask, "Copy a native Hermes prompt for the next networking move. Nothing is sent.");
+  ask.addEventListener("click", async () => {
+    const prompt = [
       `Review this contact for networking.`,
       `Contact: ${contact.name || "unknown"}`,
       contact.company ? `Company: ${contact.company}` : "",
@@ -2294,9 +2398,9 @@ const renderNetworkItem = (item) => {
       `Email status: ${status}`,
       "Tell me the next useful move without sending anything.",
     ].filter(Boolean).join("\n");
-    autoResize();
-    switchView("chat");
-    composerInput.focus();
+    const copied = await copyText(prompt);
+    ask.textContent = copied ? "Copied" : "Drafted";
+    window.setTimeout(() => { ask.textContent = "Copy Prompt"; }, 1600);
     saveChatState();
   });
   actions.appendChild(ask);
@@ -3417,7 +3521,7 @@ const restoreChatState = () => {
     renderMessage(messages[messages.length - 1], transcript);
   }
 
-  const savedView = saved.currentView || "dashboard";
+  const savedView = saved.currentView === "chat" ? "dashboard" : (saved.currentView || "dashboard");
   restoringChatState = false;
   if (savedView !== "dashboard") switchView(savedView);
   saveChatState();

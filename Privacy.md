@@ -8,7 +8,7 @@ The committed repository should contain code, schemas, documentation, example co
 
 These files are private runtime data:
 
-- private profile/seed files such as `profile-seed.*` or `career-seed.*`
+- private profile/seed files such as `knowledge_base.html`
 - `config/jobapps.local.*`
 - `data/`
 - `private/`

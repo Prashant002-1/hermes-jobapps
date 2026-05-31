@@ -1,29 +1,27 @@
 # Hermes JobApps Agent Instructions
 
-This public repository contains a generic, reproducible JobApps cockpit. Keep it simple, useful, and privacy-safe.
+This project is Prashant's Hermes-centered job-application cockpit. Keep it simple, useful, and alive.
 
-## Source Of Truth
+## Source of Truth
 
 Read these before meaningful product, agent, or writing work:
 
-1. `GOAL.md` - product direction and first useful workflow.
-2. The JobApps database schema and current app data - jobs, profile facts, proof points, application signals, tailoring requirements, portrayal decisions, learning patterns, materials, contacts, progress, follow-ups, approvals, and prompt builds.
-3. `DESIGN.md` and `docs/ARCHITECTURE_RESEARCH.md` - architecture stance and Hermes integration notes.
-4. `docs/BRANDING.md` and `design-system/` - Hermes-native visual language and JobApps branding layer.
+1. `GOAL.md` — product direction and first useful workflow.
+2. The JobApps database schema and current app data — jobs, profile facts, proof points, application signals, tailoring requirements, portrayal decisions, learning patterns, materials, contacts, progress, follow-ups, approvals, and prompt builds.
+3. `DESIGN.md` and `docs/ARCHITECTURE_RESEARCH.md` — architecture stance and Hermes integration notes.
+4. `docs/BRANDING.md` and `design-system/` — Hermes-native visual language and JobApps branding layer.
 5. Relevant project skills under `skills/` and the Hermes project plugin under `.hermes/plugins/jobapps/`.
 
-The committed public skills are examples. Replace them locally with private skills that match your own target roles, voice, proof points, constraints, outreach strategy, and workflow preferences. Do not commit personal rules, profile details, or private career patterns to a public fork.
-
-Legacy private seed files are not canonical runtime structure. Do not couple app behavior to their shape, parse them as the live source of truth, or treat their sections as a database schema. If private seed material exists, import useful facts into structured database rows first.
+`knowledge_base.html` is not canonical runtime structure. It is a private seed/example file only. Do not couple app behavior to its shape, parse it as the live source of truth, or treat its sections as a database schema. If private seed material exists, import useful facts into structured database rows first.
 
 Do not treat old generated drafts as truth. Generate from the database, current job context, Hermes memory where appropriate, and explicit user corrections.
 
 ## What We Are Building
 
-Hermes JobApps helps a user move from an opportunity to a clear next action:
+Hermes JobApps helps Prashant move from an opportunity to a clear next action:
 
-- run blocker preflight quickly: work authorization, impossible seniority, location, and application effort
-- assume apply intent when the user provides a JD and no hard blocker appears
+- run blocker preflight quickly: sponsorship/work authorization, impossible seniority, location, and application effort
+- assume apply intent when Prashant provides a JD and no hard blocker appears
 - research the company and role just enough to avoid blind tailoring
 - find the strongest truthful angle
 - turn JD needs into tailoring requirements
@@ -39,11 +37,11 @@ The app owns structured state. Hermes performs transitions.
 
 - **Hermes at the center.** The product should expose what Hermes is thinking, doing, asking, and changing. Do not hide the agent behind generic dashboard chrome.
 - **Database over document coupling.** Profile facts, proof points, application signals, tailoring requirements, portrayal decisions, learning patterns, jobs, materials, contacts, approvals, progress, and follow-ups belong in structured app data.
-- **Config over hardcoding.** Work-authorization rules, blocker thresholds, source lists, banned phrases, templates, and profile facts should be configurable and inspectable.
+- **Config over hardcoding.** Sponsorship rules, blocker thresholds, source lists, banned phrases, templates, and profile facts should be configurable and inspectable.
 - **Transparent by default.** Every recommendation should show evidence: job requirement, matched proof point, blocker/risk, and material provenance.
 - **Human approval for external actions.** Draft freely. Fill forms cautiously later. Never submit applications, send emails, or message people without explicit approval in that moment.
 - **State is structured. Memory is selective.** Jobs, dates, contacts, statuses, generated materials, decisions, and material provenance belong in the app data layer. Durable career preferences and lessons can live in Hermes memory or profile config.
-- **Blockers early.** Explicit work-authorization, location, seniority, or application-effort blockers mean skip unless the user overrides.
+- **Sponsorship filter early.** No sponsorship or obvious work-authorization blocker means skip unless Prashant explicitly says otherwise.
 - **Build the workflow before the crawler.** Manual job link/description first. Discovery and browser automation come later.
 
 ## Hermes Integration
@@ -67,21 +65,21 @@ Follow Hermes architecture rather than duplicating it:
 - Fail visibly. Do not bury failures behind silent fallbacks.
 - Comments explain intent, tradeoffs, or non-obvious behavior. Do not narrate obvious code.
 - No emojis in code, logs, seed data, or product copy unless explicitly requested.
-- No overbuilt `tasks/` directory or planning sprawl unless the user asks for it.
+- No overbuilt `tasks/` directory or planning sprawl unless Prashant asks for it.
 
 ## Workflow Loop
 
 For each opportunity:
 
 1. **Ingest** the job link or pasted description.
-2. **Blocker preflight** for work authorization, location, seniority, and application effort. Do not fit-score the applicant.
-3. **Assume apply intent** when the user supplied the JD and no hard blocker appears.
+2. **Blocker preflight** for sponsorship/work authorization, location, seniority, and application effort. Do not fit-score Prashant.
+3. **Assume apply intent** when Prashant supplied the JD and no hard blocker appears.
 4. **Classify** the role family: AI/agent, backend, full-stack, data engineering, data analytics, ML/DS, mobile/iOS, DevOps/IT, research, other.
-5. **Research lightly** with Hermes for company context, team/product context, blocker signal, and networking targets.
+5. **Research lightly** with Hermes for sponsorship signal, company context, team/product context, and networking targets.
 6. **Extract signals and tailoring requirements** from the JD.
 7. **Match** requirements to active, user-confirmed database proof points.
 8. **Update context** when the user gives a new durable experience story or preference.
-9. **Choose angle**: the one truthful story that gives the applicant the strongest position.
+9. **Choose angle**: the one truthful story that gives Prashant the strongest position.
 10. **Draft materials** using project skills and save resume/cover-letter builds as `.tex`.
 11. **Record provenance**: tailoring requirement, portrayal decision, material change, and supporting proof point.
 12. **Record learning patterns** when corrections should carry into future applications.
@@ -107,7 +105,7 @@ Do not add LangGraph, Browser Use, Stagehand, queues, or multi-agent orchestrati
 A change is done when it improves the real workflow and has been checked:
 
 - the user-facing state is clear
-- generated writing follows configured local voice rules
+- generated writing follows Prashant's voice
 - job facts are traceable to the job description or research source
 - profile claims are traceable to database proof points/profile facts
 - material changes are recorded with tailoring requirements, portrayal decisions, and proof-point support

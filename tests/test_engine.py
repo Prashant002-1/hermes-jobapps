@@ -123,7 +123,7 @@ class EvaluationTests(unittest.TestCase):
     def test_high_pay_west_coast_roles_surface_competition_and_networking_risk(self) -> None:
         job = {
             "title": "New Grad Data Engineer",
-            "company": "Acme Robotics",
+            "company": "WeRide",
             "location": "San Jose, CA",
             "description": """
             Build data pipelines, ETL workflows, and SQL quality checks for autonomy datasets.
@@ -172,10 +172,10 @@ class RepositoryTests(unittest.TestCase):
             )
             job_id = record["job"]["id"]
             repo.save_material(job_id, "cover_letter", "\\documentclass{letter}", format="tex")
-            repo.create_progress_item("Review cover letter", job_id=job_id, kind="material_review")
+            repo.create_progress_item("Send follow-up email", job_id=job_id, kind="networking")
             repo.create_followup("2026-05-15", "Check response", job_id=job_id)
             repo.create_approval(
-                "review_generated_materials",
+                "manual_send_email",
                 job_id=job_id,
                 payload={"materials": ["cover_letter.tex"]},
             )
@@ -251,6 +251,83 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(payload["state"]["jobs"][0]["status"], "applied")
             self.assertIn("watch for replies", payload["state"]["jobs"][0]["next_action"])
 
+    def test_dashboard_exposes_lean_job_state_buckets_and_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            new_record = repo.create_job(
+                {
+                    "title": "Backend Engineer",
+                    "company": "NewCo",
+                    "status": "evaluated",
+                    "description": "Build APIs.",
+                },
+                {"decision": "apply", "role_family": "backend", "next_action": "Review blocker preflight."},
+            )
+            legacy_ready_record = repo.create_job(
+                {
+                    "title": "AI Engineer",
+                    "company": "ReadyCo",
+                    "status": "approved",
+                    "description": "Build agent workflows.",
+                },
+                {"decision": "apply", "role_family": "ai_agent_systems", "next_action": "Apply with prepared materials."},
+            )
+            review_record = repo.create_job(
+                {
+                    "title": "Data Engineer",
+                    "company": "ReviewCo",
+                    "status": "materials_ready_for_review",
+                    "description": "Build data systems.",
+                },
+                {"decision": "apply", "role_family": "data_engineering", "next_action": "Review generated materials."},
+            )
+            applied_record = repo.create_job(
+                {
+                    "title": "ML Engineer",
+                    "company": "AppliedCo",
+                    "description": "Build evaluation workflows.",
+                },
+                {"decision": "apply", "role_family": "ml_ds", "next_action": "Submit application."},
+            )
+            applied_skip_decision_record = repo.create_job(
+                {
+                    "title": "Oracle DBA",
+                    "company": "Precision Technologies Corp.",
+                    "status": "applied",
+                    "description": "Maintain Oracle databases.",
+                },
+                {"decision": "skip", "role_family": "backend", "next_action": "Already applied."},
+            )
+            skip_record = repo.create_job(
+                {
+                    "title": "Senior DBA",
+                    "company": "SkipCo",
+                    "status": "skip",
+                    "description": "Requires sponsorship not available.",
+                },
+                {"decision": "skip", "role_family": "backend", "next_action": "Skip due to blocker."},
+            )
+            repo.save_material(legacy_ready_record["job"]["id"], "resume", "\\documentclass{article}", format="tex")
+            repo.save_material(review_record["job"]["id"], "resume", "\\documentclass{article}", format="tex")
+            repo.record_event(
+                applied_record["job"]["id"],
+                "status_changed",
+                {"status": "applied", "next_action": "Track response.", "source": "test"},
+            )
+
+            dashboard = repo.dashboard()
+            jobs = {job["id"]: job for job in dashboard["jobs"]}
+
+            self.assertEqual(dashboard["job_state_counts"], {"new": 3, "applied": 2, "skip": 1})
+            self.assertEqual(jobs[new_record["job"]["id"]]["state_bucket"], "new")
+            self.assertEqual(jobs[legacy_ready_record["job"]["id"]]["state_bucket"], "new")
+            self.assertEqual(jobs[review_record["job"]["id"]]["state_bucket"], "new")
+            self.assertTrue(jobs[review_record["job"]["id"]]["needs_material_review"])
+            self.assertEqual(jobs[applied_record["job"]["id"]]["state_bucket"], "applied")
+            self.assertEqual(jobs[applied_skip_decision_record["job"]["id"]]["state_bucket"], "applied")
+            self.assertEqual(jobs[skip_record["job"]["id"]]["state_bucket"], "skip")
+            self.assertTrue(jobs[applied_record["job"]["id"]]["state_dates"]["applied"])
+
     def test_batch_hermes_run_endpoint_queues_selected_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             state = AppState(None, str(Path(tmpdir) / "state.sqlite3"))
@@ -318,9 +395,9 @@ class RepositoryTests(unittest.TestCase):
                 },
             )
             job_id = record["job"]["id"]
-            progress = repo.create_progress_item("Review generated resume", job_id=job_id, kind="material_review")
+            progress = repo.create_progress_item("Send email to recruiter", job_id=job_id, kind="networking")
             followup = repo.create_followup("2026-05-22", "Send follow-up", job_id=job_id)
-            approval = repo.create_approval("review_generated_materials", job_id=job_id)
+            approval = repo.create_approval("manual_send_email", job_id=job_id)
 
             repo.update_progress_item(progress["id"], "done")
             repo.update_followup(followup["id"], "not_needed")
@@ -333,6 +410,70 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(dashboard["approval_count"], 0)
             self.assertEqual(health["open_progress_items"], 0)
             self.assertEqual(health["open_followups"], 0)
+
+    def test_backend_refuses_review_actions_at_creation_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            record = repo.create_job(
+                {
+                    "title": "Data Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build data systems.",
+                },
+                {"decision": "apply", "role_family": "data_engineering", "next_action": "Prepare materials."},
+            )
+            job_id = record["job"]["id"]
+
+            blocked_progress_cases = [
+                ("Review generated resume", "task"),
+                ("Check cover letter", "material_review"),
+                ("Review generated resume and cover letter", "material_review"),
+            ]
+            for title, kind in blocked_progress_cases:
+                with self.subTest(title=title, kind=kind):
+                    with self.assertRaises(ValueError):
+                        repo.create_progress_item(title, job_id=job_id, kind=kind)
+
+            blocked_approval_actions = [
+                "review_generated_materials",
+                "review_application_materials",
+                "review_outreach_draft",
+            ]
+            for action in blocked_approval_actions:
+                with self.subTest(action=action):
+                    with self.assertRaises(ValueError):
+                        repo.create_approval(action, job_id=job_id)
+                    with self.assertRaises(ValueError):
+                        repo.upsert_pending_approval(action, job_id=job_id)
+
+            allowed = repo.create_progress_item("Send email to recruiter", job_id=job_id, kind="networking")
+            approval = repo.create_approval("manual_send_email", job_id=job_id)
+            saved = repo.get_job(job_id)
+
+            self.assertEqual(allowed["title"], "Send email to recruiter")
+            self.assertEqual(approval["action"], "manual_send_email")
+            self.assertEqual([item["title"] for item in saved["progress_items"]], ["Send email to recruiter"])
+            self.assertEqual([item["action"] for item in saved["approvals"]], ["manual_send_email"])
+
+    def test_prepare_opportunity_does_not_create_review_or_research_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = AppState(None, str(Path(tmpdir) / "state.sqlite3"))
+            state.config["materials_path"] = str(Path(tmpdir) / "materials")
+            seed_context(state.repo)
+
+            record = state.workflow.prepare_opportunity(
+                {
+                    "title": "Data Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build Python and SQL data pipelines for production analytics, data validation, reporting, workflow automation, and stakeholder-facing data products. Work with software engineers and analysts to design reliable ingestion jobs, document data definitions, monitor data quality, and support cloud-based services.",
+                }
+            )
+            job = state.repo.get_job(record["job"]["id"])
+
+            self.assertEqual(job["progress_items"], [])
+            self.assertEqual(job["approvals"], [])
+            self.assertEqual(state.repo.dashboard()["progress_count"], 0)
+            self.assertEqual(state.repo.dashboard()["approval_count"], 0)
 
     def test_action_disposition_endpoints_return_refreshed_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -350,9 +491,9 @@ class RepositoryTests(unittest.TestCase):
                 },
             )
             job_id = record["job"]["id"]
-            progress = state.repo.create_progress_item("Submit application", job_id=job_id, kind="application")
+            progress = state.repo.create_progress_item("Send application email", job_id=job_id, kind="networking")
             followup = state.repo.create_followup("2026-05-22", "Follow up", job_id=job_id)
-            approval = state.repo.create_approval("review_generated_materials", job_id=job_id)
+            approval = state.repo.create_approval("manual_send_email", job_id=job_id)
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -393,17 +534,47 @@ class RepositoryTests(unittest.TestCase):
                 {"decision": "apply", "role_family": "data_engineering", "facts": {}},
             )
             job_id = record["job"]["id"]
-            progress = state.repo.create_progress_item(
-                "Review generated resume and cover letter",
-                job_id=job_id,
-                kind="material_review",
-                status="open",
-            )
-            approval = state.repo.create_approval(
-                "review_application_materials",
-                job_id=job_id,
-                payload={"progress_item_id": progress["id"], "material_ids": ["mat1"]},
-            )
+            progress = {
+                "id": "legacyprogress1",
+                "title": "Review generated resume and cover letter",
+            }
+            approval = {
+                "id": "abc123abc123",
+                "action": "review_application_materials",
+            }
+            with state.repo._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO progress_items (id, job_id, title, kind, status, due_date, notes, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        progress["id"],
+                        job_id,
+                        progress["title"],
+                        "material_review",
+                        "open",
+                        "",
+                        "Legacy review row from before sparse Actions policy.",
+                        "2026-05-01T00:00:00Z",
+                        "2026-05-01T00:00:00Z",
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO approvals (id, job_id, action, status, payload, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        approval["id"],
+                        job_id,
+                        approval["action"],
+                        "pending",
+                        json.dumps({"progress_item_id": progress["id"], "material_ids": ["mat1"]}),
+                        "2026-05-01T00:00:00Z",
+                        "2026-05-01T00:00:00Z",
+                    ),
+                )
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -433,21 +604,21 @@ class RepositoryTests(unittest.TestCase):
             record = repo.create_job(
                 {
                     "title": "New Grads 2026 Data Engineer",
-                    "company": "Acme Robotics",
+                    "company": "WeRide",
                     "location": "San Jose, CA",
                     "description": "Build data pipelines. Visa sponsorship is available.",
                 },
                 {
                     "decision": "apply",
                     "role_family": "data_engineering",
-                    "facts": {"title": "New Grads 2026 Data Engineer", "company": "Acme Robotics"},
+                    "facts": {"title": "New Grads 2026 Data Engineer", "company": "WeRide"},
                     "next_action": "Review generated materials and contact a recruiter.",
                 },
             )
             job_id = record["job"]["id"]
             contact = repo.upsert_contact(
                 "Avery Recruiter",
-                company="Acme Robotics",
+                company="WeRide",
                 role="University Recruiting",
                 linkedin_url="https://www.linkedin.com/in/avery-recruiter",
                 email_status="missing",
@@ -457,14 +628,14 @@ class RepositoryTests(unittest.TestCase):
                 "resume",
                 "resume tex",
                 format="tex",
-                file_path=str(Path(tmpdir) / "materials" / job_id / "acme_robotics_new_grads_2026_data_engineer_resume.tex"),
+                file_path=str(Path(tmpdir) / "materials" / job_id / "weride_new_grads_2026_data_engineer_resume.tex"),
             )
             draft = repo.save_material(
                 job_id,
                 "outreach_draft",
                 "Hi Avery, I am applying to the data engineer role.",
                 format="text",
-                metadata={"subject": "Acme Robotics Data Engineer", "contact_id": contact["id"], "channel": "linkedin"},
+                metadata={"subject": "WeRide Data Engineer", "contact_id": contact["id"], "channel": "linkedin"},
             )
             followup = repo.create_followup("2026-05-20", "Follow up with Avery", job_id=job_id, contact_id=contact["id"])
 
@@ -475,10 +646,10 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(dashboard_job["materials_workbench"]["primary"]["resume"]["id"], resume["id"])
             self.assertEqual(
                 dashboard_job["materials_workbench"]["primary"]["resume"]["display_name"],
-                "acme_robotics_new_grads_2026_data_engineer_resume.tex",
+                "weride_new_grads_2026_data_engineer_resume.tex",
             )
             self.assertEqual(dashboard_job["outreach"]["drafts"][0]["id"], draft["id"])
-            self.assertEqual(dashboard_job["outreach"]["drafts"][0]["subject"], "Acme Robotics Data Engineer")
+            self.assertEqual(dashboard_job["outreach"]["drafts"][0]["subject"], "WeRide Data Engineer")
             self.assertEqual(dashboard_job["outreach"]["contacts"][0]["id"], contact["id"])
             self.assertEqual(dashboard_job["outreach"]["followups"][0]["id"], followup["id"])
 
@@ -618,7 +789,7 @@ class RepositoryTests(unittest.TestCase):
             event = repo.record_brain_event(
                 "preference",
                 "Avoid generic enthusiasm",
-                "The applicant prefers direct, specific application writing over generic enthusiasm.",
+                "Prashant prefers direct, specific application writing over generic enthusiasm.",
                 entity_type="job_search",
                 entity_name="voice",
                 source="test",
@@ -638,7 +809,7 @@ class RepositoryTests(unittest.TestCase):
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             repo.upsert_profile_fact(
                 "work_authorization",
-                "Work authorization constraints with sponsorship sensitivity.",
+                "F-1 OPT with sponsorship sensitivity.",
                 category="constraint",
                 source="test",
             )
@@ -999,7 +1170,7 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(record["job"]["title"], "AI Engineer")
             self.assertEqual(record["job"]["company"], "ExampleCo")
             self.assertTrue(record["materials"])
-            self.assertTrue(record["approvals"])
+            self.assertEqual(record["approvals"], [])
 
     def test_native_tui_material_prep_tool_queues_pending_jobs_concurrently(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1085,7 +1256,7 @@ class ToolTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(Path(saved["file_path"]).name, "Applicant Name - Cover Letter - ExampleCo - AI Engineer.tex")
+            self.assertEqual(Path(saved["file_path"]).name, "Prashant Shah - Cover Letter - ExampleCo - AI Engineer.tex")
             self.assertFalse(Path(saved["file_path"]).name == "cover_letter.tex")
             self.assertTrue(Path(saved["file_path"]).exists())
 
@@ -1114,11 +1285,11 @@ class ToolTests(unittest.TestCase):
             )
 
             self.assertEqual(saved["format"], "tex")
-            self.assertEqual(Path(saved["file_path"]).name, "Applicant Name - Resume - ExampleCo - AI Engineer.tex")
+            self.assertEqual(Path(saved["file_path"]).name, "Prashant Shah - Resume - ExampleCo - AI Engineer.tex")
             self.assertFalse(Path(saved["file_path"]).name == "resume_tailoring.tex")
             self.assertTrue(Path(saved["file_path"]).exists())
 
-    def test_approval_tools_create_and_update_review_gate(self) -> None:
+    def test_approval_tools_create_and_update_external_send_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             toolbox = AgentToolbox(repo, load_config())
@@ -1134,8 +1305,8 @@ class ToolTests(unittest.TestCase):
                 "jobapps_request_approval",
                 {
                     "job_id": record["job"]["id"],
-                    "action": "review_generated_materials",
-                    "payload": {"materials": ["resume_tailoring.tex"]},
+                    "action": "manual_send_email",
+                    "payload": {"reason": "Send prepared outreach email."},
                 },
             )
 
@@ -1169,8 +1340,8 @@ class ToolTests(unittest.TestCase):
                 "jobapps_create_progress_item",
                 {
                     "job_id": job_id,
-                    "title": "Review generated resume and cover letter",
-                    "kind": "material_review",
+                    "title": "Send email to recruiter",
+                    "kind": "networking",
                     "status": "open",
                     "notes": "First pass ready.",
                 },
@@ -1179,8 +1350,8 @@ class ToolTests(unittest.TestCase):
                 "jobapps_create_progress_item",
                 {
                     "job_id": job_id,
-                    "title": "  review   generated resume and cover letter  ",
-                    "kind": "material_review",
+                    "title": "  send   email to recruiter  ",
+                    "kind": "networking",
                     "status": "open",
                     "due_date": "2026-05-28",
                     "notes": "Revised pass ready.",
@@ -1193,7 +1364,7 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(progress_items[0]["notes"], "Revised pass ready.")
             self.assertEqual(progress_items[0]["due_date"], "2026-05-28")
 
-    def test_mark_material_ready_reuses_pending_review_action(self) -> None:
+    def test_mark_material_ready_updates_material_metadata_without_action_gate(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             toolbox = AgentToolbox(repo, load_config())
@@ -1209,15 +1380,7 @@ class ToolTests(unittest.TestCase):
             resume = repo.save_material(job_id, "resume", "resume tex", format="tex")
             cover = repo.save_material(job_id, "cover_letter", "cover tex", format="tex")
 
-            first = toolbox.execute(
-                "jobapps_mark_material_ready_for_review",
-                {
-                    "job_id": job_id,
-                    "material_ids": [resume["id"]],
-                    "reason": "Resume ready.",
-                },
-            )
-            second = toolbox.execute(
+            result = toolbox.execute(
                 "jobapps_mark_material_ready_for_review",
                 {
                     "job_id": job_id,
@@ -1230,13 +1393,41 @@ class ToolTests(unittest.TestCase):
             pending_approvals = [item for item in job_state["approvals"] if item["status"] == "pending"]
             open_progress = [item for item in job_state["progress_items"] if item["status"] == "open"]
 
-            self.assertEqual(first["approval"]["id"], second["approval"]["id"])
-            self.assertEqual(len(pending_approvals), 1)
-            self.assertEqual(pending_approvals[0]["payload"]["material_ids"], [resume["id"], cover["id"]])
-            self.assertEqual(len(open_progress), 1)
-            self.assertEqual(open_progress[0]["kind"], "material_review")
-            self.assertEqual(open_progress[0]["notes"], "Resume and cover revised.")
-            self.assertEqual(second["approval"]["payload"]["progress_item_id"], open_progress[0]["id"])
+            self.assertIsNone(result["approval"])
+            self.assertIsNone(result["progress_item"])
+            self.assertEqual(len(pending_approvals), 0)
+            self.assertEqual(len(open_progress), 0)
+            self.assertEqual([item["metadata"]["review_status"] for item in result["materials"]], ["ready_for_review", "ready_for_review"])
+
+    def test_dashboard_actions_only_include_purposeful_send_and_followup_work(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            record = repo.create_job(
+                {
+                    "title": "Software Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build internal workflow tools.",
+                },
+                {"decision": "apply", "facts": {}, "score_0_to_5": 3.0},
+            )
+            job_id = record["job"]["id"]
+            repo.create_progress_item("Run quick company and sponsorship research", job_id=job_id, kind="research")
+            repo.create_progress_item("Find networking targets", job_id=job_id, kind="networking")
+            repo.create_progress_item("Submit ExampleCo application", job_id=job_id, kind="application")
+            send_progress = repo.create_progress_item("Send email to Jane after application", job_id=job_id, kind="networking")
+            followup = repo.create_followup("2026-06-05", "Send follow-up to Jane", job_id=job_id)
+            send_approval = repo.create_approval("manual_send_email_to_jane", job_id=job_id)
+
+            dashboard = repo.dashboard()
+            job = next(item for item in dashboard["jobs"] if item["id"] == job_id)
+
+            self.assertEqual([item["id"] for item in dashboard["progress_items"]], [send_progress["id"]])
+            self.assertEqual([item["id"] for item in dashboard["followups"]], [followup["id"]])
+            self.assertEqual([item["id"] for item in dashboard["approvals"]], [send_approval["id"]])
+            self.assertEqual(dashboard["progress_count"], 1)
+            self.assertEqual(dashboard["followup_count"], 1)
+            self.assertEqual(dashboard["approval_count"], 1)
+            self.assertEqual(job["open_action_count"], 3)
 
     def test_learning_pattern_tool_persists_user_correction_rule(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1621,7 +1812,7 @@ class MaterialWorkbenchTests(unittest.TestCase):
             record = repo.create_job(
                 {
                     "title": "New Grads 2026 Data Engineer",
-                    "company": "Acme Robotics",
+                    "company": "WeRide",
                     "description": "Build data pipelines with SQL and validation for autonomy datasets.",
                 },
                 {"decision": "apply", "facts": {}, "score_0_to_5": None},
@@ -1632,7 +1823,7 @@ class MaterialWorkbenchTests(unittest.TestCase):
                 "jobapps_create_resume_tex",
                 {
                     "job_id": job_id,
-                    "headline": "Software engineer focused on practical systems",
+                    "headline": "AI Engineer focused on agentic systems",
                     "sections": [
                         {"title": "Projects", "items": ["Built an agent retrieval system with evaluation traces."]}
                     ],
@@ -1644,15 +1835,15 @@ class MaterialWorkbenchTests(unittest.TestCase):
                 {
                     "job_id": job_id,
                     "body": "Agentic systems matter when state, tools, retrieval, and evaluation work together.",
-                    "company": "Acme Robotics",
+                    "company": "WeRide",
                     "rationale": "Create a send-ready cover letter material.",
                 },
             )
 
             self.assertEqual(resume["kind"], "resume")
             self.assertEqual(letter["kind"], "cover_letter")
-            self.assertEqual(Path(resume["file_path"]).name, "Applicant Name - Resume - Acme Robotics - New Grads 2026 Data Engineer.tex")
-            self.assertEqual(Path(letter["file_path"]).name, "Applicant Name - Cover Letter - Acme Robotics - New Grads 2026 Data Engineer.tex")
+            self.assertEqual(Path(resume["file_path"]).name, "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.tex")
+            self.assertEqual(Path(letter["file_path"]).name, "Prashant Shah - Cover Letter - WeRide - New Grads 2026 Data Engineer.tex")
             self.assertFalse(Path(resume["file_path"]).name == "resume.tex")
             self.assertFalse(Path(letter["file_path"]).name == "cover_letter.tex")
             dashboard_job = repo.dashboard()["jobs"][0]
@@ -1660,7 +1851,7 @@ class MaterialWorkbenchTests(unittest.TestCase):
             self.assertEqual(dashboard_job["materials_workbench"]["primary"]["resume"]["id"], resume["id"])
             self.assertEqual(
                 dashboard_job["materials_workbench"]["primary"]["resume"]["display_name"],
-                "Applicant Name - Resume - Acme Robotics - New Grads 2026 Data Engineer.tex",
+                "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.tex",
             )
 
     def test_professional_material_filename_sanitizes_without_looking_programmatic(self) -> None:
@@ -1670,7 +1861,7 @@ class MaterialWorkbenchTests(unittest.TestCase):
             "PDF",
         )
 
-        self.assertEqual(filename, "Applicant Name - Resume - ACME Data Inc. - Software Engineer New Grad Backend.pdf")
+        self.assertEqual(filename, "Prashant Shah - Resume - ACME Data Inc. - Software Engineer New Grad Backend.pdf")
         self.assertNotIn("_", filename)
         self.assertNotIn("/", filename)
 
@@ -2002,7 +2193,7 @@ class WorkflowTests(unittest.TestCase):
             job = state["jobs"][0]
 
             self.assertEqual(state["job_count"], 1)
-            self.assertEqual(state["approval_count"], 1)
+            self.assertEqual(state["approval_count"], 0)
             self.assertEqual(job["title"], "AI Engineer")
             self.assertEqual(job["company"], "ExampleCo")
             self.assertIsNone(job.get("score"))
@@ -2014,7 +2205,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn("resume_tex", job)
             self.assertIn("cover_letter_tex", job)
             self.assertIn("prompt", job)
-            self.assertTrue(job["progress"])
+            self.assertEqual(job["progress"], [])
             self.assertTrue(job["risks"])
 
     def test_prepare_opportunity_creates_tex_prompt_and_management_state(self) -> None:
@@ -2041,9 +2232,9 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(formats["resume_tailoring"], "tex")
             self.assertEqual(formats["cover_letter"], "tex")
             self.assertTrue(record["prompts"])
-            self.assertTrue(record["progress_items"])
-            self.assertTrue(record["followups"])
-            self.assertTrue(record["approvals"])
+            self.assertEqual(record["progress_items"], [])
+            self.assertEqual(record["followups"], [])
+            self.assertEqual(record["approvals"], [])
 
 
 class FakeHermesClient:
@@ -2569,7 +2760,7 @@ class HermesRunManagerTests(unittest.TestCase):
             self.assertTrue(refreshed["tailoring_requirements"])
             self.assertTrue(refreshed["portrayal_decisions"])
             self.assertTrue(repo.list_learning_patterns())
-            self.assertTrue([item for item in refreshed["approvals"] if item["action"] == "review_hermes_materials"])
+            self.assertEqual([item for item in refreshed["approvals"] if item["action"].startswith("review")], [])
 
             refreshed_again = manager.refresh_for_job(job_id)
             output_materials = [

@@ -162,7 +162,7 @@ def _outreach(
     name: str,
     config: dict[str, Any],
 ) -> str:
-    first_name = name.split()[0] if name else "Applicant"
+    first_name = name.split()[0] if name else "Prashant"
     return (
         "Hi [Name],\n\n"
         f"I came across the {title} role at {company} and noticed that the work seems close to {angle.lower()}. "

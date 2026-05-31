@@ -101,7 +101,7 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
                 status = job.get("status") or "saved"
                 decision = job.get("decision") or "review"
                 lines.append(f"- {job.get('id')}: {title} at {company}; status={status}; decision={decision}")
-        lines.append("Use jobapps_* tools for durable app state changes. Use jobapps_start_material_prep to queue background material-prep runs for existing jobs when the user wants multiple applications prepared in parallel. Discovery candidates must be promoted before tailoring. For networking, use jobapps_find_people to cache public contacts and jobapps_create_gmail_draft only for drafts; never send email.")
+        lines.append("Use jobapps_* tools for durable app state changes. Use jobapps_start_material_prep to queue background material-prep runs for existing jobs when Prashant wants multiple applications prepared in parallel. Discovery candidates must be promoted before tailoring. For networking, use jobapps_find_people to cache public contacts and jobapps_create_gmail_draft only for drafts; never send email.")
         return {"context": "\n".join(lines)}
     except Exception as exc:
         return {"context": f"JobApps context bridge failed: {exc}"}

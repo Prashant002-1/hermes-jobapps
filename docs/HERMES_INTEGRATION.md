@@ -115,10 +115,6 @@ With the project plugin enabled, native Hermes can:
 - load `jobapps:jobapps-cockpit`
 - use `/jobapps` to view a compact dashboard summary
 
-The public `jobapps-cockpit` skill is a generic template. For real use, replace
-it locally with private rules for your own target roles, work constraints,
-writing voice, proof-point policy, and outreach strategy.
-
 You can also ignore the web cockpit and run native Hermes against the JobApps
 profile:
 
@@ -143,7 +139,7 @@ JobApps supports launching material-preparation work for multiple job descriptio
 6. **Failure behavior:** if Hermes rejects or cannot start a run, the app run becomes `failed`, a `hermes_run_failed` event is recorded, and the job status is updated to `hermes_failed`. Other jobs' launch workers must continue unaffected.
 7. **Artifact isolation:** generated files are always written under `materials_path/<job_id>/`. No generated material may write outside that root, and child symlink components are rejected.
 
-This gives the applicant a practical workflow: paste or promote several JDs, open each job in JobApps, start material prep, and let the app prepare resumes, cover letters, and outreach drafts in parallel while the applicant submits applications from the official links.
+This gives Prashant the practical workflow he needs: paste or promote several JDs, open each job in JobApps, start material prep, and let the app prepare resumes/cover letters/outreach in parallel while he submits applications from the official links.
 
 Native Hermes TUI sessions use the same contract through the project plugin:
 `jobapps_prepare_opportunity` creates structured JobApps jobs from pasted JDs,
@@ -159,16 +155,15 @@ Generated resume and cover-letter filenames should look like files a candidate i
 Canonical filename pattern:
 
 ```text
-Applicant Name - Resume - <Company> - <Role>.tex
-Applicant Name - Resume - <Company> - <Role>.pdf
-Applicant Name - Cover Letter - <Company> - <Role>.tex
-Applicant Name - Cover Letter - <Company> - <Role>.pdf
+Prashant Shah - Resume - <Company> - <Role>.tex
+Prashant Shah - Resume - <Company> - <Role>.pdf
+Prashant Shah - Cover Letter - <Company> - <Role>.tex
+Prashant Shah - Cover Letter - <Company> - <Role>.pdf
 ```
 
 Rules:
 
 - Use title case labels: `Resume`, `Cover Letter`, `Resume Tailoring`, `Short Answers`, etc.
-- Replace `Applicant Name` through local profile facts, payload overrides, or private config before real submissions.
 - Preserve spaces and normal hyphens for human readability.
 - Strip path separators/control characters and collapse whitespace.
 - Cap the company/role portions so filenames stay manageable.

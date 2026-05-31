@@ -27,15 +27,19 @@ WEB_ROOT = PROJECT_ROOT / "web"
 DESIGN_ROOT = PROJECT_ROOT / "design-system"
 COCKPIT_JOB_STATUSES = {
     "new": "Review the role and run blocker preflight.",
-    "preparing": "Tailor materials and confirm blockers.",
-    "ready_to_apply": "Review materials, then apply when ready.",
     "applied": "Record application details and watch for replies.",
-    "waiting": "Wait for response or schedule the next follow-up.",
-    "closed": "Archive outcome and preserve any useful learning.",
+    "skip": "Skip this role and preserve the reason.",
 }
 COCKPIT_STATUS_ALIASES = {
     "inbox": "new",
-    "ready": "ready_to_apply",
+    "ready": "new",
+    "ready_to_apply": "new",
+    "preparing": "new",
+    "waiting": "applied",
+    "closed": "applied",
+    "skipped": "skip",
+    "not_interested": "skip",
+    "not_needed": "skip",
 }
 ACTION_ITEM_STATUSES = {"open", "pending", "done", "dismissed", "not_needed", "canceled", "cancelled"}
 ACTION_STATUS_ALIASES = {
@@ -716,7 +720,7 @@ def _normalize_action_item_status(value: Any) -> str:
 
 
 def _pending_hermes_job_ids(jobs: list[dict[str, Any]]) -> list[str]:
-    blocked_statuses = {"applied", "waiting", "closed", "rejected", "declined", "archived", "hermes_completed"}
+    blocked_statuses = {"applied", "waiting", "closed", "rejected", "declined", "archived", "hermes_completed", "skip", "skipped", "not_interested", "not_needed"}
     output: list[str] = []
     for job in jobs:
         job_id = str(job.get("id") or "")

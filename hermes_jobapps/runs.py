@@ -374,7 +374,11 @@ class HermesRunManager:
 
         for item in _list(records.get("progress_items")):
             payload = {**item, "job_id": job_id}
-            self.toolbox.execute("jobapps_create_progress_item", payload, run_id=app_run_id)
+            try:
+                self.toolbox.execute("jobapps_create_progress_item", payload, run_id=app_run_id)
+            except ValueError as exc:
+                if "not a dashboard Action" not in str(exc):
+                    raise
 
         for followup in _list(records.get("followups")):
             payload = {**followup, "job_id": job_id}
@@ -382,7 +386,11 @@ class HermesRunManager:
 
         for approval in _list(records.get("approvals")):
             payload = {**approval, "job_id": job_id}
-            self.toolbox.execute("jobapps_request_approval", payload, run_id=app_run_id)
+            try:
+                self.toolbox.execute("jobapps_request_approval", payload, run_id=app_run_id)
+            except ValueError as exc:
+                if "not dashboard Actions" not in str(exc):
+                    raise
 
         status = records.get("status")
         if isinstance(status, str) and status:

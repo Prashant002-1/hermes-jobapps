@@ -11,7 +11,7 @@
     "timeout_seconds": 60
   },
   "profile": {
-    "target_direction": "Replace with local target roles and role families"
+    "target_direction": "AI Engineer focused on agentic systems, RAG, tool-use, evaluation, and applied LLM workflows"
   },
   "hermes": {
     "api_base": "http://127.0.0.1:8642/v1",

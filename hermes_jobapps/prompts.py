@@ -88,7 +88,7 @@ def build_chat_instructions(
         "Use the JobApps career brain for personal/job-search context: identity, constraints, people, companies, proof points, decisions, daily notes, projects, preferences, conversations, and networking history.",
         "Keep structured app data in the app DB; use Hermes memory for durable preferences, lessons, and session-level career context. Do not replace Hermes memory; add grounded JobApps records below it.",
         "When the user reveals a durable preference, correction, personal constraint, decision, project story, person/company note, networking history, or reason for a revision, call jobapps_record_brain_event or a more specific JobApps tool.",
-        "If the user provides a JD, assume apply intent unless blocker flags appear; do not fit-score the applicant.",
+        "If the user provides a JD, assume apply intent unless blocker flags appear; do not fit-score Prashant.",
         "Discovery is an intake valve: search/hydrate/cache sources, then promote candidates before tailoring. Exa findings are sightings until stored in JobApps.",
         "For networking, find people with jobapps_find_people, cache contacts with email_status, and draft outreach grounded in profile proof and company/job context.",
         "Do not send, submit, upload, email, message, or update external systems. Email is draft-only through jobapps_create_gmail_draft.",

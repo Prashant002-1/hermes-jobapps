@@ -36,55 +36,51 @@
 
   <div class="app">
     <nav class="nav-rail" id="navRail">
-      <button class="nav-item active" data-view="dashboard" title="State">
+      <button class="nav-item active" data-view="dashboard" title="State" aria-label="State">
         <span class="material-symbols-outlined nav-icon">monitoring</span>
         <span class="nav-label">State</span>
       </button>
-      <button class="nav-item" data-view="actions" title="Actions">
+      <button class="nav-item" data-view="actions" title="Actions" aria-label="Actions">
         <span class="material-symbols-outlined nav-icon">task_alt</span>
         <span class="nav-label">Actions</span>
       </button>
-      <button class="nav-item" data-view="brain" title="Brain">
+      <button class="nav-item" data-view="brain" title="Brain" aria-label="Brain">
         <span class="material-symbols-outlined nav-icon">psychology</span>
         <span class="nav-label">Brain</span>
       </button>
-      <button class="nav-item" data-view="discovery" title="Find">
+      <button class="nav-item" data-view="discovery" title="Find" aria-label="Find">
         <span class="material-symbols-outlined nav-icon">travel_explore</span>
         <span class="nav-label">Find</span>
       </button>
-      <button class="nav-item" data-view="jobs" title="Jobs">
+      <button class="nav-item" data-view="jobs" title="Jobs" aria-label="Jobs">
         <span class="material-symbols-outlined nav-icon">work</span>
         <span class="nav-label">Jobs</span>
       </button>
-      <button class="nav-item" data-view="materials" title="Materials">
+      <button class="nav-item" data-view="materials" title="Materials" aria-label="Materials">
         <span class="material-symbols-outlined nav-icon">inventory_2</span>
         <span class="nav-label">Materials</span>
       </button>
 
       <div class="nav-divider"></div>
 
-      <button class="nav-item" data-view="network" title="Network">
+      <button class="nav-item" data-view="network" title="Network" aria-label="Network">
         <span class="material-symbols-outlined nav-icon">hub</span>
         <span class="nav-label">Network</span>
       </button>
-      <button class="nav-item" data-view="activity" title="Events">
+      <button class="nav-item" data-view="activity" title="Events" aria-label="Events">
         <span class="material-symbols-outlined nav-icon">timeline</span>
         <span class="nav-label">Events</span>
       </button>
-      <button class="nav-item" data-view="criteria" title="Rules">
+      <button class="nav-item" data-view="criteria" title="Rules" aria-label="Rules">
         <span class="material-symbols-outlined nav-icon">gavel</span>
         <span class="nav-label">Rules</span>
       </button>
 
       <div class="nav-spacer"></div>
 
-      <button class="nav-item" data-view="sessions" title="Sessions">
+      <button class="nav-item" data-view="sessions" title="Sessions" aria-label="Sessions">
         <span class="material-symbols-outlined nav-icon">history</span>
         <span class="nav-label">Sessions</span>
-      </button>
-      <button class="nav-item" data-view="chat" title="Chat">
-        <span class="material-symbols-outlined nav-icon">chat</span>
-        <span class="nav-label">Chat</span>
       </button>
     </nav>
 
@@ -115,19 +111,19 @@
         <div class="stat-strip">
           <div class="stat-item">
             <span class="stat-value" id="statJobs">0</span>
-            <span class="stat-label">Jobs Tracked</span>
+            <span class="stat-label">New</span>
           </div>
           <div class="stat-item">
             <span class="stat-value" id="statNeedsAction">0</span>
-            <span class="stat-label">Active Actions</span>
+            <span class="stat-label">Applied</span>
           </div>
           <div class="stat-item">
             <span class="stat-value" id="statMaterials">0</span>
-            <span class="stat-label">Materials</span>
+            <span class="stat-label">Skip</span>
           </div>
           <div class="stat-item">
             <span class="stat-value" id="statPeople">0</span>
-            <span class="stat-label">People</span>
+            <span class="stat-label">Actions</span>
           </div>
         </div>
 
@@ -139,34 +135,22 @@
         <div class="dash-section">
           <div class="board-shell">
             <div class="section-head board-section-head">
-              <h2>Application Board</h2>
+              <h2>Job Flow</h2>
               <span class="pipeline-message" id="pipelineMessage" aria-live="polite"></span>
               <span class="count" id="pipelineWip">0 active</span>
             </div>
             <div class="pipeline" id="pipeline">
               <div class="pipeline-col">
-                <div class="pipeline-head">Inbox <span id="pipeInboxCount">0</span></div>
+                <div class="pipeline-head">New <span id="pipeInboxCount">0</span></div>
                 <div class="pipeline-body" id="pipeNew"></div>
-              </div>
-              <div class="pipeline-col">
-                <div class="pipeline-head">Preparing <span id="pipePrepCount">0</span></div>
-                <div class="pipeline-body" id="pipePrep"></div>
-              </div>
-              <div class="pipeline-col">
-                <div class="pipeline-head">Ready <span id="pipeReadyCount">0</span></div>
-                <div class="pipeline-body" id="pipeReady"></div>
               </div>
               <div class="pipeline-col">
                 <div class="pipeline-head">Applied <span id="pipeAppliedCount">0</span></div>
                 <div class="pipeline-body" id="pipeApplied"></div>
               </div>
               <div class="pipeline-col">
-                <div class="pipeline-head">Waiting <span id="pipeWaitingCount">0</span></div>
-                <div class="pipeline-body" id="pipeWaiting"></div>
-              </div>
-              <div class="pipeline-col">
-                <div class="pipeline-head">Closed <span id="pipeClosedCount">0</span></div>
-                <div class="pipeline-body" id="pipeClosed"></div>
+                <div class="pipeline-head">Skip <span id="pipeSkipCount">0</span></div>
+                <div class="pipeline-body" id="pipeSkip"></div>
               </div>
             </div>
           </div>
@@ -309,9 +293,9 @@
           <input type="text" class="input" id="jobsSearch" placeholder="Filter">
           <div class="filter-bar" id="jobsFilters">
             <button class="chip active" data-filter="all">All</button>
-            <button class="chip" data-filter="apply">Apply</button>
+            <button class="chip" data-filter="new">New</button>
+            <button class="chip" data-filter="applied">Applied</button>
             <button class="chip" data-filter="skip">Skip</button>
-            <button class="chip" data-filter="pending">Pending</button>
           </div>
         </div>
         <div class="jobs-layout">

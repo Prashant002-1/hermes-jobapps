@@ -21,7 +21,7 @@ from .materials import (
     text_diff,
 )
 from .networking import NetworkingService
-from .repository import ACTIVE_HERMES_RUN_STATUSES, JobRepository, MATERIAL_REVIEW_PROGRESS_TITLE
+from .repository import ACTIVE_HERMES_RUN_STATUSES, JobRepository
 from .writers import draft_materials
 
 
@@ -506,7 +506,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_mark_material_ready_for_review",
-        "description": "Mark one or more materials ready for human review and create an approval gate.",
+        "description": "Mark one or more materials ready for human review without creating a dashboard Action.",
         "input_schema": {
             "type": "object",
             "required": ["job_id"],
@@ -589,7 +589,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_create_progress_item",
-        "description": "Create a progress item for application, research, material review, or networking work.",
+        "description": "Create a purposeful progress item for real user work such as a networking send or follow-up; do not use this for review materials, research, generic apply/submit reminders, or other obvious workflow steps.",
         "input_schema": {
             "type": "object",
             "required": ["title"],
@@ -1025,8 +1025,8 @@ class AgentToolbox:
     def _create_resume_tex(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = self.repo.get_job(payload["job_id"])["job"]
         context = self.repo.career_context()
-        name = payload.get("name") or _profile_value(context, "name", "Applicant Name")
-        headline = payload.get("headline") or f"Software engineer focused on practical systems for {job.get('title') or 'target roles'}"
+        name = payload.get("name") or _profile_value(context, "name", "Prashant Shah")
+        headline = payload.get("headline") or f"AI Engineer focused on agentic systems for {job.get('title') or 'target roles'}"
         tex = build_full_resume_tex(name=name, headline=headline, sections=payload.get("sections") or [])
         filename = job_material_filename(job, "resume", "tex")
         file_path = write_material_artifact(payload["job_id"], filename, tex, root=self.config.get("materials_path", "data/materials"))
@@ -1055,7 +1055,7 @@ class AgentToolbox:
             body=payload["body"],
             company=payload.get("company") or job.get("company") or "Hiring Team",
             role_title=payload.get("role_title") or job.get("title") or "Target Role",
-            name=payload.get("name") or _profile_value(context, "name", "Applicant Name"),
+            name=payload.get("name") or _profile_value(context, "name", "Prashant Shah"),
         )
         filename = job_material_filename(job, "cover_letter", "tex")
         file_path = write_material_artifact(
@@ -1194,24 +1194,7 @@ class AgentToolbox:
             for material_id in material_ids
         ]
         reason = payload.get("reason", "Materials ready for final human review.")
-        progress_item = self.repo.upsert_open_progress_item(
-            MATERIAL_REVIEW_PROGRESS_TITLE,
-            job_id=payload["job_id"],
-            kind="material_review",
-            status="open",
-            notes=reason,
-        )
-        approval = self.repo.upsert_pending_approval(
-            "review_application_materials",
-            job_id=payload["job_id"],
-            payload={
-                "material_ids": material_ids,
-                "reason": reason,
-                "approval_gate": "Do not send or submit these materials until approved.",
-                "progress_item_id": progress_item["id"],
-            },
-        )
-        return {"approval": approval, "materials": updated_materials, "progress_item": progress_item}
+        return {"approval": None, "materials": updated_materials, "progress_item": None, "reason": reason}
 
     def _save_prompt(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.repo.save_prompt_build(
@@ -1365,7 +1348,7 @@ def _material_prep_job_ids(payload: dict[str, Any], dashboard: dict[str, Any]) -
 
 
 def _pending_material_prep_job_ids(jobs: list[dict[str, Any]]) -> list[str]:
-    blocked_statuses = {"applied", "waiting", "closed", "rejected", "declined", "archived", "hermes_completed"}
+    blocked_statuses = {"applied", "waiting", "closed", "rejected", "declined", "archived", "hermes_completed", "skip", "skipped", "not_interested", "not_needed"}
     output: list[str] = []
     for job in jobs:
         decision = str(job.get("decision") or job.get("evaluation", {}).get("decision") or "pending").lower()

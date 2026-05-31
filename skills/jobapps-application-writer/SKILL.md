@@ -1,22 +1,20 @@
 ---
 name: jobapps-application-writer
-description: Generic public template for drafting or tailoring resume notes, cover letters, and application answers.
+description: Use when drafting or tailoring Prashant's resume notes, cover letters, and application answers.
 version: 1.0.0
 author: Hermes Agent
 license: MIT
 metadata:
   hermes:
     tags: [job-search, resume, cover-letter, writing]
-    related_skills: [jobapps-role-evaluator, applicant-voice]
+    related_skills: [jobapps-role-evaluator, prashant-voice]
 ---
 
 # JobApps Application Writer
 
 ## Purpose
 
-Generate application materials that sound like the applicant and stay grounded in truth. The goal is not generic polish. The goal is shipped applications with the right angle for the role.
-
-This public skill is intentionally generic. Replace it with a private/local skill that reflects your own voice rules, resume strategy, proof-point policy, banned phrases, target roles, and material templates.
+Generate application materials that sound like Prashant and stay grounded in truth. The goal is not generic polish. The goal is shipped applications with the right angle for the role.
 
 ## Required Context
 
@@ -33,9 +31,9 @@ Read JobApps database context first. It should contain:
 - outreach rules
 - voice and banned phrases
 
-Use JobApps database facts, proof points, learning patterns, and app-owned materials as runtime context. Do not browse or reuse old Downloads resumes, cover letters, CVs, private seed files, LinkedIn exports, website copy, or generated variants as live material sources.
+Use JobApps database facts, proof points, learning patterns, and app-owned materials as runtime context. Do not browse or reuse old Downloads resumes, cover letters, CVs, `knowledge_base.html`, LinkedIn exports, website copy, or generated variants as live material sources.
 
-If writing in a specific personal voice, load your private voice/style skill from your local Hermes profile or private repo. Do not publish personal voice rules in this public skill.
+If writing in Prashant's voice outside this project, also load the `prashant-voice` skill.
 
 ## Resume Tailoring Rules
 
@@ -44,16 +42,16 @@ If writing in a specific personal voice, load your private voice/style skill fro
 - Tailor by choosing the right slice of real work, not inventing work.
 - Start from `tailoring_requirements`; each meaningful change should answer a JD need.
 - Apply `learning_patterns` before choosing phrasing or emphasis.
-- Record the framing choice as a `portrayal_decision` when it changes how the applicant is presented.
+- Record the framing choice as a `portrayal_decision` when it changes how Prashant is presented.
 - Use role-family ordering from database/config.
 - Use numbers only when they are load-bearing.
 - Project header tags should be few and high-signal.
 - Drop padding tools and broad skill inventories.
 - Save resume builds as LaTeX.
 - Save materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not hand-invent submission filenames.
-- Rotate sections by role using database/config rules. Common role families include software engineering, data engineering, full-stack, backend, AI/ML, analytics, research, IT, internships, and contract roles.
-- Prefer current, user-confirmed proof signals from the database. Public examples must remain synthetic; private employer, school, GPA, immigration, or project details belong in local profile facts and proof points.
-- Use education, GPA, graduation wording, legal work-status language, and headline rules only when they are present in local profile/config records or explicitly supplied by the user.
+- Rotate sections by role. Data Engineer and Software Engineer are the primary defaults. Backend, SWE, data/ML-adjacent, research assistant, IT/help desk, internship, and contract versions are acceptable when they help Prashant survive and move forward.
+- Prefer current proof signals: Center for Food Action data engineering/validation/PostgreSQL work, Trimble C#/.NET/API/auth/SQL work, Novartis React/TypeScript/Azure/dashboard/data-model work, Personal Canvas Agent, ARAG/Trellis-RAG, and relevant Ramapo data analysis. Confirm details before making them stronger than the source supports.
+- For the post-grad base resume, remove stale "Expected" graduation wording. Use "May 2026" for the completed Ramapo degree unless Prashant gives different official wording. Use GPA 3.8/4.0, rounded from Prashant's current post-grad GPA of 3.75, unless he explicitly asks for the exact GPA. Do not reuse older 3.84/4.00 values from stale resumes, CVs, or `knowledge_base.html`.
 - Treat new impact claims from the CV/knowledge base, such as funding, media, number of pantries, user counts, or exact performance effects, as candidate proof until confirmed or supported by a reliable source.
 
 ## Cover Letter Rules
@@ -77,11 +75,11 @@ If writing in a specific personal voice, load your private voice/style skill fro
 - Use one concrete proof point.
 - Avoid resume-regurgitation.
 - Prefer mechanism over adjective.
-- If the answer asks for motivation, explain the problem that pulls the applicant in.
+- If the answer asks for motivation, explain the problem that pulls Prashant in.
 
 ## Voice Rules
 
-Use configured voice rules. Generic defaults:
+Use:
 
 - direct sentences
 - technical specificity
@@ -89,7 +87,7 @@ Use configured voice rules. Generic defaults:
 - conviction without performance
 - honest constraints when needed
 
-Avoid generic filler and any phrase listed in local banned-phrase records. Common public-safe examples:
+Avoid:
 
 - generic passion language
 - inflated metrics
@@ -102,6 +100,7 @@ Avoid generic filler and any phrase listed in local banned-phrase records. Commo
 - "cutting-edge"
 - "fast-paced environment"
 - "leverage" when it is consulting-slide filler
+- em dashes
 
 ## Drafting Loop
 
@@ -140,4 +139,4 @@ Keep the explanation short. The draft is the artifact.
 - [ ] The draft maps to the job's actual tailoring requirements.
 - [ ] Resume and cover-letter builds are LaTeX when saved as app materials.
 - [ ] Material changes have reasons, tailoring requirements, portrayal decisions, and proof points.
-- [ ] The writing sounds like a thoughtful applicant, not a resume generator.
+- [ ] The writing sounds like a thoughtful engineer, not a resume generator.

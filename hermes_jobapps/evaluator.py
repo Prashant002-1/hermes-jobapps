@@ -500,7 +500,7 @@ def collect_risks(facts: dict[str, Any], combined: str) -> list[str]:
     if high_salary_start:
         risks.append("$120k+ starting salary is a competition signal, not an automatic priority.")
     if high_salary_start and west_coast:
-        risks.append("High-pay West Coast role: treat as a competition signal. Prioritize networking before deep tailoring.")
+        risks.append("High-pay West Coast role: harder from a Ramapo/East Coast profile. Prioritize networking before deep tailoring.")
     if facts["seniority_risk"] == "stretch":
         risks.append("Seniority may be a stretch. Use the strongest matching proof point and avoid overclaiming.")
     if facts["effort_risk"] == "heavy":
