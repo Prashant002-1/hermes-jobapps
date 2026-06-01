@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .latex import build_cover_letter_tex, build_resume_tex, job_material_filename, write_material_artifact
+from .latex import build_cover_letter_tex, job_material_filename, write_material_artifact
+from .typst import build_resume_typst
 from .prompts import build_opportunity_prompt
 from .repository import JobRepository
 from .tools import AgentToolbox
@@ -82,7 +83,7 @@ class JobAppsWorkflow:
             proof_id = proof_candidates[0].get("proof_id") if proof_candidates else None
             self.repo.record_portrayal_decision(
                 job_id,
-                target="resume_tailoring.tex",
+                target="resume_tailoring.typ",
                 after_text=str(target.get("requested_portrayal") or target.get("requirement") or ""),
                 rationale=f"JD-grounded tailoring target: {target.get('requirement', '')}",
                 requirement_id=requirement["id"],
@@ -100,20 +101,20 @@ class JobAppsWorkflow:
         drafts: dict[str, Any],
         run_id: str,
     ) -> None:
-        resume_tex = build_resume_tex(job, evaluation, drafts)
+        resume_typst = build_resume_typst(job, evaluation, drafts)
         cover_tex = build_cover_letter_tex(job, evaluation, drafts)
         materials_root = self.toolbox.config.get("materials_path", "data/materials")
-        resume_filename = job_material_filename(job, "resume_tailoring", "tex")
+        resume_filename = job_material_filename(job, "resume_tailoring", "typ")
         cover_filename = job_material_filename(job, "cover_letter", "tex")
-        resume_path = write_material_artifact(job_id, resume_filename, resume_tex, root=materials_root)
+        resume_path = write_material_artifact(job_id, resume_filename, resume_typst, root=materials_root)
         cover_path = write_material_artifact(job_id, cover_filename, cover_tex, root=materials_root)
         self.toolbox.execute(
             "jobapps_save_material",
             {
                 "job_id": job_id,
                 "kind": "resume_tailoring",
-                "format": "tex",
-                "content": resume_tex,
+                "format": "typ",
+                "content": resume_typst,
                 "file_path": resume_path,
                 "rationale": evaluation.get("strongest_angle", ""),
                 "metadata": {"source": "local_prepare"},

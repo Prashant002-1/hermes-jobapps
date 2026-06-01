@@ -26,7 +26,7 @@ Read JobApps database context first. It should contain:
 - proof points
 - previous application choices, tailoring requirements, portrayal decisions, learning patterns, and material-change records
 - skills rotation rules
-- resume rules and active LaTeX templates
+- resume rules and active Typst templates
 - cover letter rules
 - outreach rules
 - voice and banned phrases
@@ -47,7 +47,7 @@ If writing in Prashant's voice outside this project, also load the `prashant-voi
 - Use numbers only when they are load-bearing.
 - Project header tags should be few and high-signal.
 - Drop padding tools and broad skill inventories.
-- Save resume builds as LaTeX.
+- Save resume builds as Typst (`.typ`) using the JobApps Typst workflow. Preserve the same content logic; only the renderer/compiler changes.
 - Save materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not hand-invent submission filenames.
 - Rotate sections by role. Data Engineer and Software Engineer are the primary defaults. Backend, SWE, data/ML-adjacent, research assistant, IT/help desk, internship, and contract versions are acceptable when they help Prashant survive and move forward.
 - Prefer current proof signals: Center for Food Action data engineering/validation/PostgreSQL work, Trimble C#/.NET/API/auth/SQL work, Novartis React/TypeScript/Azure/dashboard/data-model work, Personal Canvas Agent, ARAG/Trellis-RAG, and relevant Ramapo data analysis. Confirm details before making them stronger than the source supports.
@@ -137,6 +137,6 @@ Keep the explanation short. The draft is the artifact.
 - [ ] No banned phrasing.
 - [ ] No em dashes.
 - [ ] The draft maps to the job's actual tailoring requirements.
-- [ ] Resume and cover-letter builds are LaTeX when saved as app materials.
+- [ ] Resume builds are Typst (`.typ`) and cover-letter builds are TeX (`.tex`) when saved as app materials.
 - [ ] Material changes have reasons, tailoring requirements, portrayal decisions, and proof points.
 - [ ] The writing sounds like a thoughtful engineer, not a resume generator.

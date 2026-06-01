@@ -17,6 +17,7 @@ from hermes_jobapps.discovery import DiscoveryError, DiscoveryService, detect_at
 from hermes_jobapps.evaluator import evaluate_job
 from hermes_jobapps.importer import import_private_seed
 from hermes_jobapps.latex import compile_tex_to_pdf, job_material_filename, write_material_artifact
+from hermes_jobapps.typst import compile_typst_to_pdf
 from hermes_jobapps.networking import NetworkingError, NetworkingService
 from hermes_jobapps.prompts import build_chat_instructions, build_opportunity_prompt
 from hermes_jobapps.repository import JobRepository
@@ -626,9 +627,9 @@ class RepositoryTests(unittest.TestCase):
             resume = repo.save_material(
                 job_id,
                 "resume",
-                "resume tex",
-                format="tex",
-                file_path=str(Path(tmpdir) / "materials" / job_id / "weride_new_grads_2026_data_engineer_resume.tex"),
+                "resume typst",
+                format="typ",
+                file_path=str(Path(tmpdir) / "materials" / job_id / "weride_new_grads_2026_data_engineer_resume.typ"),
             )
             draft = repo.save_material(
                 job_id,
@@ -646,7 +647,7 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(dashboard_job["materials_workbench"]["primary"]["resume"]["id"], resume["id"])
             self.assertEqual(
                 dashboard_job["materials_workbench"]["primary"]["resume"]["display_name"],
-                "weride_new_grads_2026_data_engineer_resume.tex",
+                "weride_new_grads_2026_data_engineer_resume.typ",
             )
             self.assertEqual(dashboard_job["outreach"]["drafts"][0]["id"], draft["id"])
             self.assertEqual(dashboard_job["outreach"]["drafts"][0]["subject"], "WeRide Data Engineer")
@@ -762,7 +763,7 @@ class RepositoryTests(unittest.TestCase):
             )
             repo.record_portrayal_decision(
                 job_id,
-                target="resume_tailoring.tex",
+                target="resume_tailoring.typ",
                 after_text="Use agent harness language for this role.",
                 rationale="JD asks for memory and evaluation traces.",
                 requirement_id=requirement["id"],
@@ -778,7 +779,7 @@ class RepositoryTests(unittest.TestCase):
 
             self.assertEqual(context["learning_patterns"][0]["pattern_type"], "portrayal_preference")
             self.assertEqual(context["recent_tailoring_requirements"][0]["id"], requirement["id"])
-            self.assertEqual(context["recent_portrayal_decisions"][0]["target"], "resume_tailoring.tex")
+            self.assertEqual(context["recent_portrayal_decisions"][0]["target"], "resume_tailoring.typ")
             self.assertIn("brain_context", context)
             self.assertGreaterEqual(context["brain_context"]["event_counts"].get("portrayal_decision", 0), 1)
 
@@ -855,7 +856,7 @@ class RepositoryTests(unittest.TestCase):
                 repo.record_application_change(
                     first["job"]["id"],
                     "resume_tailoring",
-                    "resume_tailoring.tex",
+                    "resume_tailoring.typ",
                     "Do not attach foreign material.",
                     "Cross-job provenance must be rejected.",
                     material_id=foreign_material["id"],
@@ -864,7 +865,7 @@ class RepositoryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 repo.record_portrayal_decision(
                     first["job"]["id"],
-                    target="resume_tailoring.tex",
+                    target="resume_tailoring.typ",
                     after_text="Do not cite retired proof.",
                     rationale="Inactive proof should not support materials.",
                     proof_id=retired_proof["id"],
@@ -1142,9 +1143,10 @@ class ImporterTests(unittest.TestCase):
 
 
 class ToolTests(unittest.TestCase):
-    def test_latex_material_format_is_normalized_to_tex(self) -> None:
+    def test_material_format_normalization_keeps_legacy_tex_and_typst_aliases(self) -> None:
         self.assertEqual(normalize_material_format("latex"), "tex")
         self.assertEqual(normalize_material_format("ltx"), "tex")
+        self.assertEqual(normalize_material_format("typst"), "typ")
 
     def test_prepare_opportunity_tool_accepts_unstructured_chat_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1260,7 +1262,36 @@ class ToolTests(unittest.TestCase):
             self.assertFalse(Path(saved["file_path"]).name == "cover_letter.tex")
             self.assertTrue(Path(saved["file_path"]).exists())
 
-    def test_save_latex_material_writes_tex_file_when_agent_says_latex(self) -> None:
+    def test_save_typst_resume_material_writes_typ_file_when_agent_omits_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            config = load_config()
+            config["materials_path"] = str(Path(tmpdir) / "materials")
+            toolbox = AgentToolbox(repo, config)
+            record = repo.create_job(
+                {
+                    "title": "AI Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build LLM agents with retrieval and evaluation for internal tools.",
+                },
+                {"decision": "maybe", "facts": {}, "score_0_to_5": 3.0},
+            )
+            saved = toolbox.execute(
+                "jobapps_save_material",
+                {
+                    "job_id": record["job"]["id"],
+                    "kind": "resume_tailoring",
+                    "format": "typst",
+                    "content": "#show: doc => doc\nResume content",
+                },
+            )
+
+            self.assertEqual(saved["format"], "typ")
+            self.assertEqual(Path(saved["file_path"]).name, "Prashant Shah - Resume - ExampleCo - AI Engineer.typ")
+            self.assertFalse(Path(saved["file_path"]).name == "resume_tailoring.typ")
+            self.assertTrue(Path(saved["file_path"]).exists())
+
+    def test_save_latex_material_writes_tex_file_when_agent_says_latex_for_legacy_materials(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             config = load_config()
@@ -1286,7 +1317,7 @@ class ToolTests(unittest.TestCase):
 
             self.assertEqual(saved["format"], "tex")
             self.assertEqual(Path(saved["file_path"]).name, "Prashant Shah - Resume - ExampleCo - AI Engineer.tex")
-            self.assertFalse(Path(saved["file_path"]).name == "resume_tailoring.tex")
+            self.assertFalse(Path(saved["file_path"]).name == "resume_tailoring.typ")
             self.assertTrue(Path(saved["file_path"]).exists())
 
     def test_approval_tools_create_and_update_external_send_action(self) -> None:
@@ -1511,7 +1542,7 @@ class ToolTests(unittest.TestCase):
                     "job_id": record["job"]["id"],
                     "requirement_id": requirement["id"],
                     "material_id": material["id"],
-                    "target": "resume_tailoring.tex",
+                    "target": "resume_tailoring.typ",
                     "after_text": "Frame this as an agent harness with state, tools, retrieval, and verification.",
                     "rationale": "The JD asks for memory and evaluation traces.",
                     "decision_type": "jd_grounded_portrayal",
@@ -1803,7 +1834,136 @@ class MaterialWorkbenchTests(unittest.TestCase):
             self.assertEqual(compiled["compiler"], str(fake_tectonic))
             self.assertTrue(Path(compiled["pdf_path"]).exists())
 
-    def test_create_full_resume_and_cover_letter_tex_materials(self) -> None:
+    def test_compile_material_pdf_is_one_shot_final_pdf_verify_and_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            repo = JobRepository(tmp / "state.sqlite3")
+            config = load_config()
+            config["materials_path"] = str(tmp / "materials")
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            fake_tectonic = bin_dir / "tectonic"
+            fake_tectonic.write_text(
+                "#!/bin/sh\n"
+                "outdir=''\n"
+                "last=''\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = \"--outdir\" ]; then shift; outdir=\"$1\"; fi\n"
+                "  last=\"$1\"\n"
+                "  shift\n"
+                "done\n"
+                "stem=$(basename \"$last\" .tex)\n"
+                "mkdir -p \"$outdir\"\n"
+                "printf '%s' '%PDF-1.4 fake' > \"$outdir/$stem.pdf\"\n"
+                "printf 'temporary log' > \"$outdir/$stem.log\"\n",
+                encoding="utf-8",
+            )
+            fake_tectonic.chmod(0o755)
+            fake_pdfinfo = bin_dir / "pdfinfo"
+            fake_pdfinfo.write_text("#!/bin/sh\nprintf 'Pages:           1\\n'\n", encoding="utf-8")
+            fake_pdfinfo.chmod(0o755)
+            fake_pdftotext = bin_dir / "pdftotext"
+            fake_pdftotext.write_text("#!/bin/sh\nprintf 'Hello supplier validation world\\n'\n", encoding="utf-8")
+            fake_pdftotext.chmod(0o755)
+            config["latex"] = {
+                "compiler_order": ["tectonic"],
+                "compiler_paths": [str(bin_dir)],
+                "timeout_seconds": 5,
+            }
+            toolbox = AgentToolbox(repo, config)
+            record = self._create_job(repo)
+            saved = toolbox.execute(
+                "jobapps_save_material",
+                {
+                    "job_id": record["job"]["id"],
+                    "kind": "resume",
+                    "format": "tex",
+                    "content": "\\documentclass{article}\n\\begin{document}Hello supplier validation world\\end{document}\n",
+                },
+            )
+
+            compiled = toolbox.execute("jobapps_compile_material_pdf", {"material_id": saved["id"]})
+
+            source_path = Path(compiled["tex_path"])
+            final_pdf = source_path.with_suffix(".pdf")
+            self.assertTrue(compiled["ok"], compiled)
+            self.assertEqual(compiled["pdf_path"], str(final_pdf))
+            self.assertTrue(final_pdf.exists())
+            self.assertFalse((source_path.parent / "build").exists())
+            self.assertEqual(compiled["verification"]["pages"], 1)
+            self.assertEqual(compiled["verification"]["word_count"], 4)
+            self.assertEqual(compiled["verification"]["contamination"], [])
+            updated = repo.get_material(saved["id"])
+            self.assertEqual(updated["metadata"]["compile"]["pdf_path"], str(final_pdf))
+            self.assertEqual(updated["metadata"]["pdf_path"], str(final_pdf))
+
+    def test_compile_material_pdf_compiles_typst_resume_and_cleans_build_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            repo = JobRepository(tmp / "state.sqlite3")
+            config = load_config()
+            config["materials_path"] = str(tmp / "materials")
+            bin_dir = tmp / "bin"
+            bin_dir.mkdir()
+            fake_typst = bin_dir / "typst"
+            fake_typst.write_text(
+                "#!/bin/sh\n"
+                "out=''\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  if [ \"$1\" = \"compile\" ]; then shift; continue; fi\n"
+                "  last=\"$1\"\n"
+                "  shift\n"
+                "done\n"
+                "out=\"$last\"\n"
+                "mkdir -p \"$(dirname \"$out\")\"\n"
+                "printf '%s' '%PDF-1.4 fake' > \"$out\"\n",
+                encoding="utf-8",
+            )
+            fake_typst.chmod(0o755)
+            fake_pdfinfo = bin_dir / "pdfinfo"
+            fake_pdfinfo.write_text("#!/bin/sh\nprintf 'Pages:           1\\n'\n", encoding="utf-8")
+            fake_pdfinfo.chmod(0o755)
+            fake_pdftotext = bin_dir / "pdftotext"
+            fake_pdftotext.write_text("#!/bin/sh\nprintf 'Hello typst resume world\\n'\n", encoding="utf-8")
+            fake_pdftotext.chmod(0o755)
+            config["typst"] = {
+                "compiler_order": ["typst"],
+                "compiler_paths": [str(bin_dir)],
+                "timeout_seconds": 5,
+            }
+            config["latex"] = {
+                "compiler_order": ["definitely_missing_tex_compiler"],
+                "compiler_paths": [str(bin_dir)],
+                "timeout_seconds": 5,
+            }
+            toolbox = AgentToolbox(repo, config)
+            record = self._create_job(repo)
+            saved = toolbox.execute(
+                "jobapps_save_material",
+                {
+                    "job_id": record["job"]["id"],
+                    "kind": "resume",
+                    "format": "typ",
+                    "content": "= Hello Typst Resume\nHello typst resume world\n",
+                },
+            )
+
+            compiled = toolbox.execute("jobapps_compile_material_pdf", {"material_id": saved["id"]})
+
+            source_path = Path(compiled["typst_path"])
+            final_pdf = source_path.with_suffix(".pdf")
+            self.assertTrue(compiled["ok"], compiled)
+            self.assertEqual(compiled["pdf_path"], str(final_pdf))
+            self.assertTrue(final_pdf.exists())
+            self.assertFalse((source_path.parent / "build").exists())
+            self.assertEqual(compiled["compiler"], str(fake_typst))
+            self.assertEqual(compiled["verification"]["pages"], 1)
+            self.assertEqual(compiled["verification"]["word_count"], 4)
+            updated = repo.get_material(saved["id"])
+            self.assertEqual(updated["metadata"]["compile"]["pdf_path"], str(final_pdf))
+            self.assertEqual(updated["metadata"]["pdf_path"], str(final_pdf))
+
+    def test_create_full_resume_typst_and_cover_letter_tex_materials(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             config = load_config()
@@ -1820,7 +1980,7 @@ class MaterialWorkbenchTests(unittest.TestCase):
             job_id = record["job"]["id"]
 
             resume = toolbox.execute(
-                "jobapps_create_resume_tex",
+                "jobapps_create_resume_typst",
                 {
                     "job_id": job_id,
                     "headline": "AI Engineer focused on agentic systems",
@@ -1842,16 +2002,16 @@ class MaterialWorkbenchTests(unittest.TestCase):
 
             self.assertEqual(resume["kind"], "resume")
             self.assertEqual(letter["kind"], "cover_letter")
-            self.assertEqual(Path(resume["file_path"]).name, "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.tex")
+            self.assertEqual(Path(resume["file_path"]).name, "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.typ")
             self.assertEqual(Path(letter["file_path"]).name, "Prashant Shah - Cover Letter - WeRide - New Grads 2026 Data Engineer.tex")
-            self.assertFalse(Path(resume["file_path"]).name == "resume.tex")
+            self.assertFalse(Path(resume["file_path"]).name == "resume.typ")
             self.assertFalse(Path(letter["file_path"]).name == "cover_letter.tex")
             dashboard_job = repo.dashboard()["jobs"][0]
             self.assertIn("materials_workbench", dashboard_job)
             self.assertEqual(dashboard_job["materials_workbench"]["primary"]["resume"]["id"], resume["id"])
             self.assertEqual(
                 dashboard_job["materials_workbench"]["primary"]["resume"]["display_name"],
-                "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.tex",
+                "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.typ",
             )
 
     def test_professional_material_filename_sanitizes_without_looking_programmatic(self) -> None:
@@ -1973,14 +2133,14 @@ class MaterialWorkbenchTests(unittest.TestCase):
             job_id = record["job"]["id"]
             material_dir = Path(state.config["materials_path"]) / job_id
             material_dir.mkdir(parents=True)
-            tex_path = material_dir / "resume_tailoring.tex"
-            tex_path.write_text("\\documentclass{article}\n", encoding="utf-8")
+            typ_path = material_dir / "resume_tailoring.typ"
+            typ_path.write_text("= Resume tailoring\n", encoding="utf-8")
             material = state.repo.save_material(
                 job_id,
                 "resume_tailoring",
-                "\\documentclass{article}\n",
-                format="tex",
-                file_path=str(tex_path),
+                "= Resume tailoring\n",
+                format="typ",
+                file_path=str(typ_path),
             )
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1995,8 +2155,8 @@ class MaterialWorkbenchTests(unittest.TestCase):
                 server.server_close()
                 thread.join(timeout=5)
 
-            self.assertIn("\\documentclass", body)
-            self.assertIn("resume_tailoring.tex", disposition)
+            self.assertIn("= Resume tailoring", body)
+            self.assertIn("resume_tailoring.typ", disposition)
 
     def test_server_serves_sibling_pdf_when_metadata_pdf_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2273,7 +2433,7 @@ class FakeHermesClient:
               "application_changes": [
                 {
                   "change_type": "resume_tailoring",
-                  "target": "resume_tailoring.tex",
+                  "target": "resume_tailoring.typ",
                   "after_text": "Emphasize agent retrieval and evaluation traces.",
                   "reason": "The job asks for retrieval and evaluation.",
                   "requirement": "Experience building retrieval systems and evaluation traces."
@@ -2291,7 +2451,7 @@ class FakeHermesClient:
               "portrayal_decisions": [
                 {
                   "job_id": "wrong_job_should_not_win",
-                  "target": "resume_tailoring.tex",
+                  "target": "resume_tailoring.typ",
                   "after_text": "Frame this as an agent harness with state, tools, retrieval, and verification.",
                   "rationale": "The JD asks for memory and evaluation traces.",
                   "decision_type": "jd_grounded_portrayal"
@@ -2323,7 +2483,7 @@ class FakeHermesClient:
                 {
                   "action": "review_hermes_materials",
                   "payload": {
-                    "materials": ["resume_tailoring.tex"],
+                    "materials": ["resume_tailoring.typ"],
                     "reason": "Hermes revised the local draft."
                   }
                 }

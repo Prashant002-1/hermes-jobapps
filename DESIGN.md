@@ -40,7 +40,7 @@ The interface should make the next action obvious. The agent should be visible: 
 
 5. **One good workflow first**
    - Start with pasted links/descriptions.
-   - Produce blocker preflight + research prompt + tailoring requirements + portrayal decisions + LaTeX materials + outreach + recorded state.
+   - Produce blocker preflight + research prompt + tailoring requirements + portrayal decisions + Typst resume materials + TeX cover-letter materials + outreach + recorded state.
    - Do not build a giant crawler before this works.
 
 6. **Human-approved external action**

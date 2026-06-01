@@ -5,7 +5,7 @@ JobApps is a career-operator cockpit built on the Hermes agent framework. It sho
 ## Brand Relationship
 
 - **Parent framework**: Hermes — agent runtime, memory, tool dispatch, chat.
-- **Product layer**: JobApps adds opportunity ingestion, blocker preflight, evidence mapping, LaTeX materials, networking, and follow-up state.
+- **Product layer**: JobApps adds opportunity ingestion, blocker preflight, evidence mapping, Typst resume materials, TeX cover-letter materials, networking, and follow-up state.
 - **Naming**: Use `JobApps` as the product name in the header, with `HERMES` as the parent-runtime subtitle. The center header mark is a minimal pixel-art JobApps wordmark; do not use duplicate runtime text such as `jobapps · jobapps`.
 
 ## Visual Tokens
@@ -62,7 +62,7 @@ Avoid: "Get started", "Your journey", "AI-powered", "Supercharge".
 - The stage is a drafting surface — ivory, dot grid, max 1440px content.
 - Chat should show Hermes as an active operator, not a hidden backend.
 - Status and evidence should be visible before long drafts.
-- LaTeX artifacts should feel inspectable and reproducible.
+- Typst resume artifacts and TeX cover-letter artifacts should feel inspectable and reproducible.
 
 ## Customization Path
 

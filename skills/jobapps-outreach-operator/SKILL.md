@@ -84,7 +84,7 @@ Clear and efficient. Confirm interest, fit, availability, and attach or mention 
 
 ### Gmail draft
 
-Creating a Gmail draft is allowed when useful. Never send. Use Prashant's personal email unless he tells you a school/alumni context needs `pshah7@ramapo.edu`.
+Creating a Gmail draft is allowed when useful. Never send. Use the applicant's preferred email unless they tell you a school or alumni context needs a different address.
 
 ## Strategy
 

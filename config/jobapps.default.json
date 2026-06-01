@@ -1,6 +1,14 @@
 {
   "database_path": "data/hermes-jobapps.sqlite3",
   "materials_path": "data/materials",
+  "typst": {
+    "compiler_order": ["typst"],
+    "compiler_paths": [
+      "/opt/homebrew/bin",
+      "/usr/local/bin"
+    ],
+    "timeout_seconds": 60
+  },
   "latex": {
     "compiler_order": ["tectonic", "latexmk", "xelatex", "pdflatex"],
     "compiler_paths": [
@@ -97,7 +105,7 @@
     "cover_letter_words": [350, 400],
     "no_generic_enthusiasm": true,
     "no_padding_metrics": true,
-    "resume_format": "tex",
+    "resume_format": "typ",
     "cover_letter_format": "tex"
   },
   "followups": {

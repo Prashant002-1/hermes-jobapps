@@ -126,21 +126,22 @@ Backend endpoint:
 
 ## 7. Live application-materials workbench
 
-**Status:** Implemented for app-owned TeX artifacts, revisions, diffs, compile contract, and approval gates.
+**Status:** Implemented for app-owned Typst resume artifacts, TeX cover-letter artifacts, revisions, diffs, compile contract, and approval gates.
 
 The cockpit now treats materials as first-class state:
 - `material_revisions` table records every agent/user patch with before/after text, unified diff, reason, requirement, and proof reference.
 - `GET /api/state` includes `materials_workbench` with primary resume/cover-letter artifacts, revision count, latest diff, compile status, PDF/log paths, and explicit external-use warning.
 - New tools expose the workbench through the existing `/api/tools/:tool` route:
-  - `jobapps_create_resume_tex` — creates full `resume.tex` artifact.
+  - `jobapps_create_resume_typst` — creates full `resume.typ` artifact.
+  - `jobapps_create_resume_tex` — legacy alias that now creates the Typst resume artifact.
   - `jobapps_create_cover_letter_tex` — creates full `cover_letter.tex` artifact.
   - `jobapps_patch_material` — exact replacement patch, file update, revision diff, provenance record.
   - `jobapps_diff_material` — preview diff without mutation.
-  - `jobapps_compile_material_pdf` — compiles TeX to PDF using configured compiler search paths and common macOS locations (`/opt/homebrew/bin`, `/usr/local/bin`, `/Library/TeX/texbin`); reports `missing_compiler` without installing anything when unavailable.
+  - `jobapps_compile_material_pdf` — compiles Typst or TeX to PDF using configured compiler search paths and common macOS locations (`/opt/homebrew/bin`, `/usr/local/bin`, `/Library/TeX/texbin`); reports `missing_compiler` without installing anything when unavailable.
   - `jobapps_mark_material_ready_for_review` — creates explicit human approval gate.
 - Frontend renders a **Materials** card with artifact metadata, revisions, latest diff, compile status, and a `Compile PDF` action.
 
-**Compiler status:** `tectonic` 0.16.9 is installed at `/opt/homebrew/bin/tectonic`; smoke tests now compile generated resume and cover-letter TeX artifacts to PDF through the app API. The code still returns `missing_compiler` cleanly on machines without a compiler.
+**Compiler status:** `typst` 0.14.2 is installed at `/opt/homebrew/bin/typst`; smoke tests compile generated resume Typst artifacts to PDF through the app API. `tectonic` remains supported for TeX cover-letter and legacy artifacts. The code still returns `missing_compiler` cleanly on machines without the requested compiler.
 
 ---
 
@@ -183,7 +184,7 @@ This is the local Honcho-like layer: app-owned conclusions with metadata, filter
 | 4 | Run ID in chat response | ✅ Implemented where available |
 | 5 | System context injection | ✅ Implemented |
 | 6 | Approval endpoint | ✅ Implemented |
-| 7 | Live materials workbench | ✅ Implemented for TeX artifacts/revisions/diffs/PDF compile via Tectonic |
+| 7 | Live materials workbench | ✅ Implemented for Typst resume artifacts, TeX cover-letter/legacy artifacts, revisions, diffs, and PDF compile |
 | 8 | Evidence + signals + tailoring lifecycle | ✅ Implemented with proof lifecycle, application signals, tailoring requirements, portrayal decisions, learning patterns, retrieval chunks, and FTS search |
 | 9 | Personal career brain | ✅ Implemented in SQLite with `brain_entities`, `brain_events`, FTS search, tool exposure, chat capture, and automatic event trails |
 

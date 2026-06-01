@@ -190,7 +190,7 @@ JobApps should be agent-centric without turning the app into an agent framework.
 - Hermes chat should be available inside the app.
 - Native Hermes TUI/API sessions should be able to see JobApps context through the project plugin or a future MCP bridge.
 - JobApps tools should let Hermes read and update database state.
-- Resume and cover-letter builds should be LaTeX files.
+- Resume builds should be Typst files; cover-letter builds remain TeX unless migrated separately.
 - Prompt builds should be saved so decisions are reproducible.
 - Research, networking notes, material changes, progress, and follow-ups should be structured records.
 - Application data and app architecture should stay separate so the repository can become public without private backend data.

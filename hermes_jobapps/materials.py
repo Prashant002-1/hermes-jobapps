@@ -6,6 +6,7 @@ import difflib
 from typing import Any
 
 from .latex import latex_escape
+from .typst import build_full_resume_typst
 
 
 def build_full_resume_tex(
@@ -14,45 +15,9 @@ def build_full_resume_tex(
     headline: str = "AI Engineer focused on agentic systems",
     sections: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Build a compact full-resume LaTeX artifact from explicit sections."""
+    """Legacy compatibility wrapper. Resume generation is Typst-first now."""
 
-    section_blocks = []
-    for section in sections or []:
-        title = latex_escape(str(section.get("title") or "Section"))
-        raw_items = section.get("items") or []
-        if isinstance(raw_items, str):
-            raw_items = [raw_items]
-        items = "\n".join(f"  \\item {latex_escape(str(item))}" for item in raw_items if str(item).strip())
-        if not items:
-            continue
-        section_blocks.append(
-            f"\\section*{{{title}}}\n\\begin{{itemize}}\n{items}\n\\end{{itemize}}"
-        )
-    if not section_blocks:
-        section_blocks.append(
-            "\\section*{Review Notes}\n\\begin{itemize}\n"
-            "  \\item Add user-confirmed projects, experience, education, and skills before external use.\n"
-            "\\end{itemize}"
-        )
-
-    return rf"""\documentclass[10pt]{{article}}
-\usepackage[margin=0.62in]{{geometry}}
-\usepackage{{enumitem}}
-\setlist[itemize]{{leftmargin=*, itemsep=2pt, topsep=2pt}}
-\pagenumbering{{gobble}}
-
-\begin{{document}}
-
-\begin{{center}}
-{{\Large \textbf{{{latex_escape(name)}}}}}\\
-{latex_escape(headline)}
-\end{{center}}
-
-{chr(10).join(section_blocks)}
-
-% JobApps full resume artifact. Do not externally submit until approved.
-\end{{document}}
-"""
+    return build_full_resume_typst(name=name, headline=headline, sections=sections)
 
 
 def build_full_cover_letter_tex(

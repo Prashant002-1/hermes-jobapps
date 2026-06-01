@@ -51,7 +51,7 @@ The first implementation is a dependency-free Python local server:
 - `hermes_jobapps/hermes_client.py` talks to the Hermes API server and proxies Responses SSE so the web UI can show streaming text, tool/function calls, and response lifecycle.
 - `hermes_jobapps/hermes_commands.py` routes native Hermes slash commands and command metadata through the `jobapps` profile's TUI/gateway command surfaces.
 - `hermes_jobapps/prompts.py` builds reproducible prompts for Hermes.
-- `hermes_jobapps/latex.py` writes reviewable `.tex` resume and cover-letter artifacts.
+- `hermes_jobapps/typst.py` writes reviewable `.typ` resume artifacts and compiles them to PDF; `hermes_jobapps/latex.py` remains for TeX cover letters and legacy TeX compile/verification helpers.
 - `hermes_jobapps/workflow.py` prepares local state, prompt builds, progress, follow-ups, and artifacts before a Hermes run.
 - `.hermes/plugins/jobapps/` exposes the same app tools and context to native Hermes.
 - `web/` exposes the cockpit and Hermes chat.

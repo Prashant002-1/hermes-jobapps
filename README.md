@@ -1,6 +1,6 @@
 # Hermes JobApps
 
-Hermes JobApps is a local job-application cockpit. Paste a job, run blocker preflight, prepare database state, build LaTeX materials, chat with Hermes, and record the next action.
+Hermes JobApps is a local job-application cockpit. Paste a job, run blocker preflight, prepare database state, build Typst resume materials and TeX cover-letter materials, chat with Hermes, and record the next action.
 
 The app owns structured state. Hermes performs transitions. A pasted JD means apply intent unless the role has a hard blocker: sponsorship/work authorization, impossible seniority, impossible location, or unreasonable application effort.
 
@@ -96,11 +96,11 @@ files under the configured `materials_path` (`data/materials` by default). The
 default file convention is:
 
 ```text
-data/materials/<job_id>/resume_tailoring.tex
+data/materials/<job_id>/resume_tailoring.typ
 data/materials/<job_id>/cover_letter.tex
-data/materials/<job_id>/resume.tex
-data/materials/<job_id>/<material_kind>.tex
-data/materials/<job_id>/build/<material_name>.pdf
+data/materials/<job_id>/resume.typ
+data/materials/<job_id>/<material_kind>.typ or .tex
+data/materials/<job_id>/<material_name>.pdf
 ```
 
 `<job_id>` is the 12-character JobApps job id, so multiple job descriptions in
@@ -182,7 +182,7 @@ as a live schema.
 
 ## What Exists
 
-- `hermes_jobapps/`: SQLite repository, tools, Hermes client, prompt builder, LaTeX helpers, workflow, and HTTP server.
+- `hermes_jobapps/`: SQLite repository, tools, Hermes client, prompt builder, Typst resume helpers, TeX cover-letter/legacy helpers, workflow, and HTTP server.
 - `.hermes/plugins/jobapps/`: Hermes-native tool and context bridge.
 - `web/`: the cockpit UI.
 - `config/jobapps.default.json`: committed, non-secret runtime defaults.
@@ -201,4 +201,4 @@ Keep `docs/` public-safe. Local-only secrets, private profile notes, generated
 materials, and machine-specific runtime data belong in ignored config/profile
 files, not in repo documentation.
 
-See [Privacy.md](/Users/prashantshah/Desktop/Prashant/Prashant%20Gallery/Code/hermes-jobapps/Privacy.md).
+See [Privacy.md](Privacy.md).

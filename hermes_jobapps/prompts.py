@@ -61,7 +61,7 @@ def build_opportunity_prompt(
         "Expected artifacts:\n"
         "- structured evaluation\n"
         "- company/job research notes with sources\n"
-        "- resume_tailoring.tex\n"
+        "- resume_tailoring.typ\n"
         "- cover_letter.tex\n"
         "- short answers\n"
         "- networking search notes and outreach drafts\n"

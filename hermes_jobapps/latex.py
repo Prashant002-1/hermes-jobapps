@@ -29,45 +29,11 @@ def latex_escape(value: str) -> str:
 
 
 def build_resume_tex(job: dict[str, Any], evaluation: dict[str, Any], drafts: dict[str, Any]) -> str:
-    title = latex_escape(evaluation.get("facts", {}).get("title") or job.get("title") or "Target Role")
-    company = latex_escape(evaluation.get("facts", {}).get("company") or job.get("company") or "Company")
-    angle = latex_escape(evaluation.get("strongest_angle", ""))
-    notes = drafts.get("resume_notes") or []
-    if not isinstance(notes, list):
-        notes = [str(notes)]
-    bullets = "\n".join(f"  \\item {latex_escape(str(note))}" for note in notes)
-    matches = "\n".join(
-        f"  \\item {latex_escape(match.get('requirement', ''))} -- {latex_escape(match.get('proof_point', ''))}"
-        for match in evaluation.get("must_have_matches", [])[:5]
-    )
-    return rf"""\documentclass[10pt]{{article}}
-\usepackage[margin=0.65in]{{geometry}}
-\usepackage{{enumitem}}
-\setlist[itemize]{{leftmargin=*, itemsep=2pt, topsep=2pt}}
-\pagenumbering{{gobble}}
+    """Legacy compatibility wrapper. Resume tailoring artifacts are Typst-first now."""
 
-\begin{{document}}
+    from .typst import build_resume_typst
 
-\section*{{Resume Tailoring Build: {title} at {company}}}
-\textbf{{Central angle:}} {angle}
-
-\subsection*{{Changes To Make}}
-\begin{{itemize}}
-{bullets}
-\end{{itemize}}
-
-\subsection*{{Requirement To Proof Map}}
-\begin{{itemize}}
-{matches}
-\end{{itemize}}
-
-\subsection*{{Build Notes}}
-This file is an app-owned LaTeX artifact. Hermes should update it through
-JobApps tools when the user changes experience stories, priorities, or role
-strategy.
-
-\end{{document}}
-"""
+    return build_resume_typst(job, evaluation, drafts)
 
 
 def build_cover_letter_tex(job: dict[str, Any], evaluation: dict[str, Any], drafts: dict[str, Any]) -> str:
@@ -205,10 +171,13 @@ def compile_tex_to_pdf(
     config: dict[str, Any] | None = None,
     output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Compile a TeX material to PDF when a compiler is available.
+    """Compile a TeX material into its final sibling PDF and verify it.
 
     The function never installs tooling. Missing compilers are reported as a
-    structured status so the cockpit can show the blocked state clearly.
+    structured status so the cockpit can show the blocked state clearly. By
+    default, compilation happens in an isolated build directory, the resulting
+    PDF is copied beside the source .tex, and the temporary build directory is
+    removed.
     """
 
     config = config or {}
@@ -242,6 +211,7 @@ def compile_tex_to_pdf(
         }
 
     build_dir = Path(output_dir) if output_dir else tex.parent / "build"
+    clean_build_dir = output_dir is None
     build_dir.mkdir(parents=True, exist_ok=True)
     command = _compile_command(compiler, tex, build_dir)
     try:
@@ -266,22 +236,92 @@ def compile_tex_to_pdf(
             "next_step": "Review the TeX source or increase the compile timeout.",
         }
 
-    pdf_path = build_dir / f"{tex.stem}.pdf"
+    built_pdf_path = build_dir / f"{tex.stem}.pdf"
     log_path = build_dir / f"{tex.stem}.log"
-    ok = completed.returncode == 0 and pdf_path.exists()
+    final_pdf_path = tex.with_suffix(".pdf")
+    ok = completed.returncode == 0 and built_pdf_path.exists()
+    verification: dict[str, Any] = {"status": "not_run"}
+    if ok:
+        shutil.copy2(built_pdf_path, final_pdf_path)
+        verification = verify_pdf(final_pdf_path, config=config)
+    if clean_build_dir:
+        shutil.rmtree(build_dir, ignore_errors=True)
     return {
         "ok": ok,
         "status": "compiled" if ok else "compile_failed",
         "tex_path": str(tex),
-        "pdf_path": str(pdf_path) if pdf_path.exists() else "",
+        "pdf_path": str(final_pdf_path) if final_pdf_path.exists() else "",
+        "build_pdf_path": str(built_pdf_path),
         "log_path": str(log_path) if log_path.exists() else "",
         "compiler": compiler,
         "command": command,
         "returncode": completed.returncode,
         "stdout": completed.stdout[-6000:],
         "stderr": completed.stderr[-6000:],
-        "next_step": "Review the generated PDF." if ok else "Open the compile log/errors, patch the TeX, and compile again.",
+        "verification": verification,
+        "next_step": "PDF compiled, copied beside the TeX source, and verified." if ok else "Open the compile log/errors, patch the TeX, and compile again.",
     }
+
+
+def verify_pdf(pdf_path: str | Path, *, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Verify a compiled PDF using local PDF tools when available."""
+
+    config = config or {}
+    latex_config = config.get("latex", {}) if isinstance(config.get("latex", {}), dict) else {}
+    search_paths = _latex_search_paths(latex_config)
+    timeout = int(latex_config.get("timeout_seconds", 60))
+    pdf = Path(pdf_path)
+    result: dict[str, Any] = {
+        "status": "missing_pdf" if not pdf.exists() else "checked",
+        "pdf_path": str(pdf),
+        "exists": pdf.exists(),
+        "pages": None,
+        "word_count": None,
+        "contamination": [],
+        "pdfinfo_exit": None,
+        "pdftotext_exit": None,
+    }
+    if not pdf.exists():
+        return result
+
+    pdfinfo = _resolve_latex_compiler("pdfinfo", search_paths)
+    if pdfinfo:
+        info = subprocess.run([pdfinfo, str(pdf)], capture_output=True, text=True, timeout=timeout, check=False)
+        result["pdfinfo_exit"] = info.returncode
+        result["pdfinfo_stdout"] = info.stdout[-2000:]
+        match = re.search(r"^Pages:\s*(\d+)\s*$", info.stdout, flags=re.MULTILINE)
+        if match:
+            result["pages"] = int(match.group(1))
+
+    pdftotext = _resolve_latex_compiler("pdftotext", search_paths)
+    if pdftotext:
+        text = subprocess.run([pdftotext, str(pdf), "-"], capture_output=True, text=True, timeout=timeout, check=False)
+        result["pdftotext_exit"] = text.returncode
+        extracted = text.stdout if text.returncode == 0 else ""
+        result["word_count"] = len(re.findall(r"\b[\w'-]+\b", extracted))
+        result["contamination"] = _contamination_terms(extracted)
+    if result["pdfinfo_exit"] is None and result["pdftotext_exit"] is None:
+        result["status"] = "verification_tools_missing"
+    return result
+
+
+def _contamination_terms(text: str) -> list[str]:
+    terms = [
+        "Learned preference",
+        "approval gate",
+        "review_status",
+        "tailoring_summary",
+        "weak networking replies",
+        "operational example",
+        "JD-specific",
+        "Frame experience truthfully",
+        "Resume Tailoring Build",
+        "Central angle",
+        "Changes To Make",
+        "Requirement To Proof Map",
+        "Build Notes",
+    ]
+    return [term for term in terms if term.lower() in text.lower()]
 
 
 def _latex_search_paths(latex_config: dict[str, Any]) -> list[str]:

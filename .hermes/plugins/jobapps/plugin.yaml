@@ -31,6 +31,7 @@ provides_tools:
   - jobapps_draft_materials
   - jobapps_record_job
   - jobapps_save_material
+  - jobapps_create_resume_typst
   - jobapps_create_resume_tex
   - jobapps_create_cover_letter_tex
   - jobapps_patch_material

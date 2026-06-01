@@ -14,9 +14,9 @@ from .config import resolve_project_path
 from .discovery import DiscoveryService
 from .evaluator import evaluate_job
 from .latex import compile_tex_to_pdf, job_material_filename, write_material_artifact
+from .typst import compile_typst_to_pdf, build_full_resume_typst
 from .materials import (
     build_full_cover_letter_tex,
-    build_full_resume_tex,
     patch_text,
     text_diff,
 )
@@ -428,8 +428,24 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "writes": True,
     },
     {
+        "name": "jobapps_create_resume_typst",
+        "description": "Create a full app-owned Typst resume artifact from explicit, user-confirmed sections.",
+        "input_schema": {
+            "type": "object",
+            "required": ["job_id"],
+            "properties": {
+                "job_id": {"type": "string"},
+                "name": {"type": "string"},
+                "headline": {"type": "string"},
+                "sections": {"type": "array", "items": {"type": "object"}},
+                "rationale": {"type": "string"},
+            },
+        },
+        "writes": True,
+    },
+    {
         "name": "jobapps_create_resume_tex",
-        "description": "Create a full app-owned resume.tex artifact from explicit, user-confirmed sections.",
+        "description": "Legacy alias for resume creation. Creates a Typst resume artifact unless explicitly handled by older code.",
         "input_schema": {
             "type": "object",
             "required": ["job_id"],
@@ -496,7 +512,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_compile_material_pdf",
-        "description": "Compile a TeX material to PDF when a compiler exists. Reports missing compiler without installing anything.",
+        "description": "Compile a Typst or TeX material to PDF when a compiler exists. Reports missing compiler without installing anything.",
         "input_schema": {
             "type": "object",
             "required": ["material_id"],
@@ -707,6 +723,7 @@ class AgentToolbox:
             "jobapps_draft_materials": self._draft_materials,
             "jobapps_record_job": self._record_job,
             "jobapps_save_material": self._save_material,
+            "jobapps_create_resume_typst": self._create_resume_typst,
             "jobapps_create_resume_tex": self._create_resume_tex,
             "jobapps_create_cover_letter_tex": self._create_cover_letter_tex,
             "jobapps_patch_material": self._patch_material,
@@ -1006,9 +1023,9 @@ class AgentToolbox:
         file_path = payload.get("file_path", "")
         if file_path:
             file_path = str(_validate_material_path(self.config, file_path))
-        if material_format == "tex" and not file_path:
+        if material_format in {"tex", "typ"} and not file_path:
             job = self.repo.get_job(payload["job_id"])["job"]
-            filename = job_material_filename(job, payload["kind"], "tex")
+            filename = job_material_filename(job, payload["kind"], material_format)
             root = self.config.get("materials_path", "data/materials")
             file_path = write_material_artifact(payload["job_id"], filename, str(content), root=root)
         return self.repo.save_material(
@@ -1022,24 +1039,26 @@ class AgentToolbox:
             metadata=payload.get("metadata", {}),
         )
 
-    def _create_resume_tex(self, payload: dict[str, Any]) -> dict[str, Any]:
+    def _create_resume_typst(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = self.repo.get_job(payload["job_id"])["job"]
         context = self.repo.career_context()
         name = payload.get("name") or _profile_value(context, "name", "Prashant Shah")
         headline = payload.get("headline") or f"AI Engineer focused on agentic systems for {job.get('title') or 'target roles'}"
-        tex = build_full_resume_tex(name=name, headline=headline, sections=payload.get("sections") or [])
-        filename = job_material_filename(job, "resume", "tex")
-        file_path = write_material_artifact(payload["job_id"], filename, tex, root=self.config.get("materials_path", "data/materials"))
+        typst = build_full_resume_typst(name=name, headline=headline, sections=payload.get("sections") or [])
+        filename = job_material_filename(job, "resume", "typ")
+        file_path = write_material_artifact(payload["job_id"], filename, typst, root=self.config.get("materials_path", "data/materials"))
         return self.repo.save_material(
             payload["job_id"],
             "resume",
-            tex,
-            payload.get("rationale", "Full resume TeX artifact for this application."),
-            format="tex",
+            typst,
+            payload.get("rationale", "Full resume Typst artifact for this application."),
+            format="typ",
             file_path=file_path,
             source="agent",
             metadata={
                 "artifact_role": "full_resume",
+                "renderer": "typst",
+                "template": "@preview/simple-technical-resume:0.1.1",
                 "provenance": {
                     "job_title": job.get("title", ""),
                     "company": job.get("company", ""),
@@ -1047,6 +1066,11 @@ class AgentToolbox:
                 },
             },
         )
+
+    def _create_resume_tex(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Backward-compatible tool name; resumes are Typst-first now."""
+
+        return self._create_resume_typst(payload)
 
     def _create_cover_letter_tex(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = self.repo.get_job(payload["job_id"])["job"]
@@ -1093,12 +1117,13 @@ class AgentToolbox:
         )
         diff = text_diff(before, after, fromfile=f"{material['kind']}@before", tofile=f"{material['kind']}@after")
         file_path = material.get("file_path") or ""
-        if material.get("format") == "tex":
+        if material.get("format") in {"tex", "typ"}:
             if not file_path:
                 job = self.repo.get_job(material["job_id"])["job"]
+                extension = "typ" if material.get("format") == "typ" else "tex"
                 file_path = write_material_artifact(
                     material["job_id"],
-                    job_material_filename(job, material["kind"], "tex"),
+                    job_material_filename(job, material["kind"], extension),
                     after,
                     root=self.config.get("materials_path", "data/materials"),
                 )
@@ -1155,28 +1180,37 @@ class AgentToolbox:
 
     def _compile_material_pdf(self, payload: dict[str, Any]) -> dict[str, Any]:
         material = self.repo.get_material(payload["material_id"])
-        if material.get("format") != "tex":
+        material_format = normalize_material_format(material.get("format"))
+        if material_format not in {"tex", "typ"}:
             return {
                 "ok": False,
                 "status": "unsupported_format",
                 "material_id": material["id"],
-                "next_step": "Only TeX materials can be compiled to PDF.",
+                "next_step": "Only Typst or TeX materials can be compiled to PDF.",
             }
         file_path = material.get("file_path") or ""
         if not file_path:
             job = self.repo.get_job(material["job_id"])["job"]
             file_path = write_material_artifact(
                 material["job_id"],
-                job_material_filename(job, material["kind"], "tex"),
+                job_material_filename(job, material["kind"], material_format),
                 str(material.get("content") or ""),
                 root=self.config.get("materials_path", "data/materials"),
             )
             material = self.repo.update_material(material["id"], file_path=file_path)
         file_path = str(_validate_material_path(self.config, file_path))
-        result = compile_tex_to_pdf(file_path, config=self.config)
+        if material_format == "typ":
+            result = compile_typst_to_pdf(file_path, config=self.config)
+        else:
+            result = compile_tex_to_pdf(file_path, config=self.config)
         updated = self.repo.update_material(
             material["id"],
-            metadata={"compile": result, "review_status": "compiled" if result.get("ok") else "compile_blocked"},
+            metadata={
+                "compile": result,
+                "pdf_path": result.get("pdf_path", ""),
+                "verification": result.get("verification", {}),
+                "review_status": "compiled" if result.get("ok") else "compile_blocked",
+            },
         )
         result["material"] = updated
         result["material_id"] = material["id"]
@@ -1288,6 +1322,8 @@ def normalize_material_format(value: Any) -> str:
     material_format = str(value or "text").strip().lower()
     if material_format in {"latex", "ltx"}:
         return "tex"
+    if material_format in {"typst"}:
+        return "typ"
     return material_format
 
 
