@@ -70,6 +70,7 @@ const actionsBoard = $("#actionsBoard");
 const actionsMessage = $("#actionsMessage");
 
 const CHAT_STATE_KEY = "hermes-jobapps.chatState.v1";
+const UI_STATE_KEY = "hermes-jobapps.uiState.v1";
 const STATE_CACHE_DB = "hermes-jobapps.state.v1";
 const STATE_CACHE_STORE = "state";
 const STATE_CACHE_KEY = "latest";
@@ -112,7 +113,7 @@ let pipelineMessage = "";
 let pipelineMessageKind = "";
 let pipelineMessageTimer = null;
 const pipelineExpanded = { applied: false, skip: false };
-const disclosureState = new Map();
+let uiStateWriteTimer = null;
 
 /* ── Helpers ── */
 const esc = (s) => {
@@ -150,6 +151,36 @@ const fetchJsonStrict = async (url) => {
   return payload;
 };
 
+const readUiState = () => {
+  try {
+    return JSON.parse(sessionStorage.getItem(UI_STATE_KEY) || "{}");
+  } catch (err) {
+    return {};
+  }
+};
+
+const storedUiState = readUiState();
+const disclosureState = new Map(Object.entries(storedUiState.disclosures || {}));
+const viewScrollState = new Map(Object.entries(storedUiState.viewScroll || {}).map(([key, value]) => [key, Number(value) || 0]));
+
+const scheduleUiStateSave = () => {
+  if (uiStateWriteTimer) window.clearTimeout(uiStateWriteTimer);
+  uiStateWriteTimer = window.setTimeout(() => {
+    uiStateWriteTimer = null;
+    try {
+      sessionStorage.setItem(
+        UI_STATE_KEY,
+        JSON.stringify({
+          disclosures: Object.fromEntries(disclosureState),
+          viewScroll: Object.fromEntries(viewScrollState),
+        })
+      );
+    } catch (err) {
+      // Session storage is a convenience; in-memory UI state still works.
+    }
+  }, 50);
+};
+
 const normalizedDisclosureText = (value) => String(value || "").trim().replace(/\s+/g, " ");
 
 const disclosureKey = (details) => {
@@ -162,9 +193,37 @@ const disclosureKey = (details) => {
   return `${viewName}:fallback:${className}:${summary}:${siblings.indexOf(details)}`;
 };
 
+const recordDisclosureState = (details, open) => {
+  disclosureState.set(disclosureKey(details), Boolean(open));
+  scheduleUiStateSave();
+};
+
 const captureDisclosureState = () => {
   document.querySelectorAll("details").forEach((details) => {
-    disclosureState.set(disclosureKey(details), details.open);
+    recordDisclosureState(details, details.open);
+  });
+};
+
+const armDisclosureState = (details) => {
+  if (details.dataset.disclosureTracked === "1") return;
+  details.dataset.disclosureTracked = "1";
+  const summary = details.querySelector("summary");
+  if (summary) {
+    summary.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      recordDisclosureState(details, !details.open);
+    });
+    summary.addEventListener("click", () => {
+      window.setTimeout(() => recordDisclosureState(details, details.open), 0);
+    });
+    summary.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      recordDisclosureState(details, !details.open);
+      window.setTimeout(() => recordDisclosureState(details, details.open), 0);
+    });
+  }
+  details.addEventListener("toggle", () => {
+    recordDisclosureState(details, details.open);
   });
 };
 
@@ -172,9 +231,28 @@ const restoreDisclosureState = () => {
   document.querySelectorAll("details").forEach((details) => {
     const key = disclosureKey(details);
     if (disclosureState.has(key)) details.open = Boolean(disclosureState.get(key));
-    details.addEventListener("toggle", () => {
-      disclosureState.set(key, details.open);
-    });
+    armDisclosureState(details);
+  });
+};
+
+const viewScrollKey = (view) => view?.dataset?.view || currentView || "";
+
+const captureViewScrollState = () => {
+  document.querySelectorAll(".view").forEach((view) => {
+    const key = viewScrollKey(view);
+    if (key) viewScrollState.set(key, view.scrollTop || 0);
+  });
+  scheduleUiStateSave();
+};
+
+const restoreCurrentViewScrollState = () => {
+  const view = $(`.view[data-view="${currentView}"]`);
+  const key = viewScrollKey(view);
+  if (!view || !key || !viewScrollState.has(key)) return;
+  const top = Number(viewScrollState.get(key)) || 0;
+  view.scrollTop = top;
+  requestAnimationFrame(() => {
+    view.scrollTop = top;
   });
 };
 
@@ -3903,6 +3981,7 @@ const extractText = (data) => {
 };
 
 const renderCurrentView = () => {
+  captureViewScrollState();
   captureDisclosureState();
   if (currentView === "dashboard") renderDashboard();
   if (currentView === "actions") renderActions();
@@ -3915,6 +3994,7 @@ const renderCurrentView = () => {
   if (currentView === "network") renderNetwork();
   if (currentView === "sessions") renderSessions();
   restoreDisclosureState();
+  restoreCurrentViewScrollState();
 };
 
 /* ── Init ── */

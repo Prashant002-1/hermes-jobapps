@@ -2333,6 +2333,18 @@ class MaterialWorkbenchTests(unittest.TestCase):
         self.assertNotIn("Reference Files", index_html)
         self.assertNotIn("referenceMaterialCount", index_html)
 
+    def test_frontend_preserves_ui_state_across_state_refreshes(self) -> None:
+        app_js = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('UI_STATE_KEY = "hermes-jobapps.uiState.v1"', app_js)
+        self.assertIn("recordDisclosureState", app_js)
+        self.assertIn("pointerdown", app_js)
+        self.assertIn("captureViewScrollState", app_js)
+        self.assertIn("restoreCurrentViewScrollState", app_js)
+        self.assertIn('shell.dataset.disclosureKey = `materials:${group.job_id', app_js)
+        self.assertIn('details.dataset.disclosureKey = `network:${group.key', app_js)
+        self.assertIn('data-disclosure-key="job:${esc(job.id)}:tailoring-requirements"', app_js)
+
     def test_frontend_exposes_shortlist_approval_bulk_prepare_and_job_detail_outreach(self) -> None:
         app_js = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         index_html = (Path(__file__).resolve().parents[1] / "web" / "index.html").read_text(encoding="utf-8")
