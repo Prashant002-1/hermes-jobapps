@@ -42,7 +42,7 @@ Operate the JobApps database and workflow from native Hermes. The app database i
 5. For an opportunity, call `jobapps_evaluate_job` or `jobapps_prepare_opportunity`. Treat the evaluation as blocker preflight plus tailoring map, not a fit score.
 6. Persist extracted needs with `jobapps_record_tailoring_requirement` when they are not already created by the workflow.
 7. Save prompt builds with `jobapps_save_prompt`.
-8. Save resume outputs as Typst (`.typ`) and cover-letter outputs as TeX (`.tex`) materials with `jobapps_save_material`.
+8. Save final resume outputs with `kind="resume"` and Typst/source format (`typ`/`typst`) or PDF format when the file is already compiled. Use `kind="resume_tailoring"` only for notes/change plans. Save cover-letter outputs as `kind="cover_letter"` TeX (`.tex`) materials with `jobapps_save_material`.
 9. Record why materials changed using `jobapps_record_portrayal_decision` and `jobapps_record_application_change`.
 10. Find real people only after there is a company/job context. Call `jobapps_networking_status`, then `jobapps_find_people`; cheap Exa Search is the default. Use `provider="auto"` or `use_websets_fallback=true` only when a verified email is worth the extra Websets cost.
 11. Cache contacts and write research notes before drafting outreach. Treat `email_status="missing"` as a real state, not a problem to hide. Do not place a contact in `To:` unless the email is verified/found or Prashant supplied it.

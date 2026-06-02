@@ -188,6 +188,54 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(len(updated["followups"]), 1)
             self.assertEqual(updated["approvals"][0]["payload"]["materials"], ["cover_letter.tex"])
 
+    def test_create_job_reuses_same_manual_job_instead_of_forking_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            job = {
+                "title": "Data Engineer",
+                "company": "BeaconFire Inc.",
+                "location": "East Windsor, NJ",
+                "description": "Create and maintain data pipeline architecture. Assemble large data sets. Automate manual processes and optimize data delivery for business stakeholders.",
+            }
+            first = repo.create_job(job, {"decision": "apply", "role_family": "data_engineering"})
+            second = repo.create_job(
+                {**job, "description": "\nCreate and maintain data pipeline architecture.  Assemble large data sets.\nAutomate manual processes and optimize data delivery for business stakeholders.\n"},
+                {"decision": "apply", "role_family": "data_engineering", "next_action": "Prepare materials."},
+            )
+
+            with repo._connect() as conn:
+                job_count = conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+                evaluation_count = conn.execute("SELECT COUNT(*) FROM evaluations WHERE job_id = ?", (first["job"]["id"],)).fetchone()[0]
+
+            self.assertEqual(second["job"]["id"], first["job"]["id"])
+            self.assertEqual(job_count, 1)
+            self.assertEqual(evaluation_count, 2)
+            self.assertEqual(second["job"]["next_action"], "Prepare materials.")
+
+    def test_create_job_does_not_merge_different_roles_from_same_company_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            first = repo.create_job(
+                {
+                    "title": "Analyst",
+                    "company": "ExampleCo",
+                    "url": "https://careers.example.com/",
+                    "description": "Analyze operations data, write reports, and support stakeholders with recurring metrics.",
+                },
+                {"decision": "apply"},
+            )
+            second = repo.create_job(
+                {
+                    "title": "Software Engineer",
+                    "company": "ExampleCo",
+                    "url": "https://careers.example.com/",
+                    "description": "Build backend APIs, ship product features, and maintain application services for customers.",
+                },
+                {"decision": "apply"},
+            )
+
+            self.assertNotEqual(second["job"]["id"], first["job"]["id"])
+
     def test_repository_updates_job_status_next_action_and_missing_jobs_visibly(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
@@ -2047,6 +2095,48 @@ class MaterialWorkbenchTests(unittest.TestCase):
             self.assertEqual(summary["pdf_path"], pdf_path)
             self.assertEqual(summary["compile_status"], "compiled")
 
+    def test_resume_typst_final_alias_is_dashboard_visible_as_resume_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            config = load_config()
+            config["materials_path"] = str(Path(tmpdir) / "materials")
+            toolbox = AgentToolbox(repo, config)
+            record = self._create_job(repo)
+            material_dir = Path(config["materials_path"]) / record["job"]["id"]
+            material_dir.mkdir(parents=True)
+            typ_path = material_dir / "Applicant - Resume - ExampleCo - Data Engineer.typ"
+            pdf_path = material_dir / "Applicant - Resume - ExampleCo - Data Engineer.pdf"
+            typ_path.write_text("#show: doc => doc\nResume", encoding="utf-8")
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+
+            saved = toolbox.execute(
+                "jobapps_save_material",
+                {
+                    "job_id": record["job"]["id"],
+                    "kind": "resume_typst_final",
+                    "format": "typst",
+                    "content": {
+                        "source_format": "typst",
+                        "source_path": str(typ_path),
+                        "pdf_path": str(pdf_path),
+                        "page_count": 1,
+                    },
+                    "file_path": str(typ_path),
+                    "metadata": {"review_status": "ready_for_review"},
+                },
+            )
+
+            dashboard_job = repo.dashboard()["jobs"][0]
+            summary = next(item for item in dashboard_job["materials_workbench"]["items"] if item["id"] == saved["id"])
+
+            self.assertEqual(saved["kind"], "resume")
+            self.assertEqual(saved["format"], "typ")
+            self.assertEqual(saved["metadata"]["pdf_path"], str(pdf_path))
+            self.assertEqual(summary["kind"], "resume")
+            self.assertEqual(summary["pdf_path"], str(pdf_path))
+            self.assertEqual(summary["compile_status"], "compiled")
+            self.assertEqual(dashboard_job["materials_workbench"]["primary"]["resume"]["id"], saved["id"])
+
     def test_material_workbench_uses_sibling_pdf_when_metadata_is_stale(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
@@ -2073,6 +2163,31 @@ class MaterialWorkbenchTests(unittest.TestCase):
             self.assertEqual(summary["pdf_path"], str(pdf_path))
             self.assertEqual(summary["compile_status"], "compiled")
 
+    def test_material_workbench_uses_typst_sibling_pdf_when_metadata_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            record = self._create_job(repo)
+            material_dir = Path(tmpdir) / "materials" / record["job"]["id"]
+            material_dir.mkdir(parents=True)
+            typ_path = material_dir / "resume.typ"
+            pdf_path = material_dir / "resume.pdf"
+            typ_path.write_text("#show: doc => doc\nResume", encoding="utf-8")
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+            material = repo.save_material(
+                record["job"]["id"],
+                "resume",
+                "#show: doc => doc\nResume",
+                format="typst",
+                file_path=str(typ_path),
+            )
+
+            dashboard_job = repo.dashboard()["jobs"][0]
+            summary = next(item for item in dashboard_job["materials_workbench"]["items"] if item["id"] == material["id"])
+
+            self.assertEqual(material["format"], "typ")
+            self.assertEqual(summary["pdf_path"], str(pdf_path))
+            self.assertEqual(summary["compile_status"], "compiled")
+
     def test_frontend_exposes_material_workbench_copy(self) -> None:
         app_js = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text(encoding="utf-8")
         index_html = (Path(__file__).resolve().parents[1] / "web" / "index.html").read_text(encoding="utf-8")
@@ -2083,6 +2198,8 @@ class MaterialWorkbenchTests(unittest.TestCase):
         self.assertIn("openMaterialViewer", app_js)
         self.assertIn("materialViewer", index_html)
         self.assertIn("materialUrl", app_js)
+        self.assertIn("materialIsCompilable", app_js)
+        self.assertIn('item.format === "pdf"', app_js)
         self.assertIn("materialTryParseJson", app_js)
         self.assertIn("materialAppendLinkedText", app_js)
         self.assertIn("renderMaterialViewerContent", app_js)
@@ -2176,6 +2293,41 @@ class MaterialWorkbenchTests(unittest.TestCase):
                 "\\documentclass{article}\n",
                 format="tex",
                 file_path=str(tex_path),
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                url = f"http://127.0.0.1:{server.server_port}/api/materials/{material['id']}/file?target=pdf"
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    body = response.read()
+                    content_type = response.headers.get("Content-Type", "")
+                    disposition = response.headers.get("Content-Disposition", "")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+            self.assertIn(b"%PDF-1.4", body)
+            self.assertEqual(content_type, "application/pdf")
+            self.assertIn("resume.pdf", disposition)
+
+    def test_server_serves_pdf_material_file_as_pdf_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = AppState(None, str(Path(tmpdir) / "state.sqlite3"))
+            state.config["materials_path"] = str(Path(tmpdir) / "materials")
+            record = self._create_job(state.repo)
+            job_id = record["job"]["id"]
+            material_dir = Path(state.config["materials_path"]) / job_id
+            material_dir.mkdir(parents=True)
+            pdf_path = material_dir / "resume.pdf"
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+            material = state.repo.save_material(
+                job_id,
+                "resume",
+                {"pdf_path": str(pdf_path), "source_format": "typst"},
+                format="pdf",
+                file_path=str(pdf_path),
             )
             server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
             thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -2368,7 +2520,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(job["progress"], [])
             self.assertTrue(job["risks"])
 
-    def test_prepare_opportunity_creates_tex_prompt_and_management_state(self) -> None:
+    def test_prepare_opportunity_creates_typst_resume_prompt_and_management_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             seed_context(repo)
@@ -2389,7 +2541,7 @@ class WorkflowTests(unittest.TestCase):
             )
 
             formats = {item["kind"]: item["format"] for item in record["materials"]}
-            self.assertEqual(formats["resume_tailoring"], "tex")
+            self.assertEqual(formats["resume_tailoring"], "typ")
             self.assertEqual(formats["cover_letter"], "tex")
             self.assertTrue(record["prompts"])
             self.assertEqual(record["progress_items"], [])

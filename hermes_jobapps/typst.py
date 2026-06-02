@@ -68,10 +68,10 @@ def build_resume_typst(job: dict[str, Any], evaluation: dict[str, Any], drafts: 
   personal-info-font-size: 9.3pt,
   author-position: center,
   personal-info-position: center,
-  author-name: "Applicant Name",
+  author-name: "Prashant Shah",
   email: "applicant@example.com",
-  linkedin-user-id: "applicant",
-  github-username: "applicant",
+  linkedin-user-id: "prashant210",
+  github-username: "Prashant002-1",
 )
 
 #custom-title({typst_string(f"Resume Notes: {title} at {company}")})[
@@ -90,7 +90,7 @@ def build_resume_typst(job: dict[str, Any], evaluation: dict[str, Any], drafts: 
 
 def build_full_resume_typst(
     *,
-    name: str = "Applicant Name",
+    name: str = "Prashant Shah",
     headline: str = "AI Engineer focused on agentic systems",
     sections: list[dict[str, Any]] | None = None,
 ) -> str:
@@ -128,8 +128,8 @@ def build_full_resume_typst(
   personal-info-position: center,
   author-name: {typst_string(name)},
   email: "applicant@example.com",
-  linkedin-user-id: "applicant",
-  github-username: "applicant",
+  linkedin-user-id: "prashant210",
+  github-username: "Prashant002-1",
 )
 
 #align(center)[{typst_escape(headline)}]

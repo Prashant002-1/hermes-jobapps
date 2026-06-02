@@ -47,7 +47,7 @@ If writing in Prashant's voice outside this project, also load the `prashant-voi
 - Use numbers only when they are load-bearing.
 - Project header tags should be few and high-signal.
 - Drop padding tools and broad skill inventories.
-- Save resume builds as Typst (`.typ`) using the JobApps Typst workflow. Preserve the same content logic; only the renderer/compiler changes.
+- Save final resume builds as standard `kind="resume"` Typst (`.typ`) or PDF materials using the JobApps workflow. Use `kind="resume_tailoring"` only for notes/change plans; do not invent final-resume kinds.
 - Save materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not hand-invent submission filenames.
 - Rotate sections by role. Data Engineer and Software Engineer are the primary defaults. Backend, SWE, data/ML-adjacent, research assistant, IT/help desk, internship, and contract versions are acceptable when they help Prashant survive and move forward.
 - Prefer current proof signals: Center for Food Action data engineering/validation/PostgreSQL work, Trimble C#/.NET/API/auth/SQL work, Novartis React/TypeScript/Azure/dashboard/data-model work, Personal Canvas Agent, ARAG/Trellis-RAG, and relevant Ramapo data analysis. Confirm details before making them stronger than the source supports.

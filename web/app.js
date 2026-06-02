@@ -2565,7 +2565,9 @@ const materialRecordUrl = (materialId) => `/api/materials/${encodeURIComponent(m
 const materialPdfPath = (item = {}) => {
   const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
   const compileInfo = metadata.compile && typeof metadata.compile === "object" ? metadata.compile : {};
-  return item.pdf_path || compileInfo.pdf_path || metadata.pdf_path || "";
+  const sourcePath = item.file_path || item.path || "";
+  const directPdfPath = item.format === "pdf" || /\.pdf$/i.test(sourcePath) ? sourcePath : "";
+  return item.pdf_path || compileInfo.pdf_path || metadata.pdf_path || directPdfPath || "";
 };
 
 const materialTextValue = (value) => {
@@ -2873,7 +2875,7 @@ const openMaterialViewer = async (materialOrId) => {
   const fallback = typeof materialOrId === "object" && materialOrId ? materialOrId : {};
   const materialId = typeof materialOrId === "string" ? materialOrId : fallback.id;
   if (!materialId) return;
-  if (fallback.format === "tex") {
+  if (materialIsCompilable(fallback)) {
     if (materialPdfPath(fallback)) {
       window.open(materialUrl(materialId, "pdf"), "_blank", "noopener");
       return;
@@ -2926,14 +2928,15 @@ const collectGeneratedMaterials = () => {
 const materialHasSource = (item = {}) => Boolean(item.file_path || item.path);
 const materialHasPdf = (item = {}) => Boolean(materialPdfPath(item));
 const materialIsTex = (item = {}) => item.format === "tex";
-const materialNeedsPdf = (item = {}) => materialIsTex(item) && !materialHasPdf(item) && ["cover_letter", "resume"].includes(item.kind || "");
+const materialIsCompilable = (item = {}) => ["tex", "typ"].includes(item.format || "");
+const materialNeedsPdf = (item = {}) => materialIsCompilable(item) && !materialHasPdf(item) && ["cover_letter", "resume"].includes(item.kind || "");
 const materialIsStoredRecord = (item = {}) => !materialHasSource(item) && !materialHasPdf(item);
 const materialCanPreviewInApp = (item = {}) => (
   Boolean(item.id) &&
-  !materialIsTex(item) &&
+  !materialIsCompilable(item) &&
   Boolean(item.content || item.content_preview || item.has_content)
 );
-const materialShouldShow = (item = {}) => !materialIsTex(item) || materialHasPdf(item) || materialNeedsPdf(item);
+const materialShouldShow = (item = {}) => !materialIsCompilable(item) || materialHasPdf(item) || materialNeedsPdf(item);
 const materialUpdatedMs = (item = {}) => {
   const raw = item.updated_at || item.created_at || "";
   if (!raw) return 0;
@@ -3036,8 +3039,8 @@ const materialGroups = (items = []) => {
 };
 
 const materialMetaText = (item = {}) => [
-  materialIsTex(item) ? "" : item.format,
-  materialIsTex(item) && item.compile_status ? humanize(item.compile_status) : "",
+  materialIsCompilable(item) ? "" : item.format,
+  materialIsCompilable(item) && item.compile_status ? humanize(item.compile_status) : "",
   item.updated_at ? fmtDateTime(item.updated_at) : "",
   `rev ${fmtNum(item.revision_count || 0)}`,
 ].filter(Boolean).join(" · ");
@@ -3294,7 +3297,7 @@ const buildCardsFromState = (state) => {
   }
 
   const tabs = [];
-  if (job.resume_tex) tabs.push({ label: "Resume .tex", content: job.resume_tex });
+  if (job.resume_tex) tabs.push({ label: "Resume source", content: job.resume_tex });
   if (job.cover_letter_tex) tabs.push({ label: "Letter .tex", content: job.cover_letter_tex });
   if (job.prompt) tabs.push({ label: "Prompt", content: job.prompt });
   if (job.hermes_output) tabs.push({ label: "Output", content: job.hermes_output });

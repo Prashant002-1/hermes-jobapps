@@ -147,7 +147,7 @@ Output:
 - portrayal decisions and material-change provenance
 - learning patterns when user corrections should repeat
 - company/job research notes
-- resume tailoring `.tex`
+- resume tailoring `.typ`
 - cover letter `.tex`
 - short-answer draft when useful
 - networking search notes and outreach draft when useful

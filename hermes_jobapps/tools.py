@@ -21,7 +21,12 @@ from .materials import (
     text_diff,
 )
 from .networking import NetworkingService
-from .repository import ACTIVE_HERMES_RUN_STATUSES, JobRepository
+from .repository import (
+    ACTIVE_HERMES_RUN_STATUSES,
+    JobRepository,
+    normalize_material_format_for_db,
+    normalize_material_kind_for_db,
+)
 from .writers import draft_materials
 
 
@@ -404,13 +409,13 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "required": ["job", "evaluation"],
-            "properties": {"job": {"type": "object"}, "evaluation": {"type": "object"}},
+            "properties": {"job_id": {"type": "string"}, "job": {"type": "object"}, "evaluation": {"type": "object"}},
         },
         "writes": True,
     },
     {
         "name": "jobapps_save_material",
-        "description": "Persist a generated material artifact for a job, including LaTeX files.",
+        "description": "Persist a generated material artifact for a job. Standard resume aliases are normalized for dashboard visibility.",
         "input_schema": {
             "type": "object",
             "required": ["job_id", "kind", "content"],
@@ -1015,28 +1020,44 @@ class AgentToolbox:
         return draft_materials(payload["job"], payload["evaluation"], context, self.config)
 
     def _record_job(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.repo.create_job(payload["job"], payload["evaluation"])
+        job = dict(payload["job"])
+        if payload.get("job_id") and not job.get("id"):
+            job["id"] = payload["job_id"]
+        return self.repo.create_job(job, payload["evaluation"])
 
     def _save_material(self, payload: dict[str, Any]) -> dict[str, Any]:
         content = payload["content"]
         material_format = normalize_material_format(payload.get("format", "text"))
+        material_kind = normalize_material_kind_for_db(
+            payload["kind"],
+            format=material_format,
+            file_path=str(payload.get("file_path", "")),
+            content=content,
+        )
+        metadata = dict(payload.get("metadata", {}) or {})
+        if isinstance(content, dict):
+            for key in ("pdf_path", "source_path", "source_format", "template", "display_name", "filename", "name"):
+                if content.get(key) and not metadata.get(key):
+                    metadata[key] = content[key]
         file_path = payload.get("file_path", "")
         if file_path:
             file_path = str(_validate_material_path(self.config, file_path))
+        elif material_format == "pdf" and isinstance(content, dict) and content.get("pdf_path"):
+            file_path = str(_validate_material_path(self.config, content["pdf_path"]))
         if material_format in {"tex", "typ"} and not file_path:
             job = self.repo.get_job(payload["job_id"])["job"]
-            filename = job_material_filename(job, payload["kind"], material_format)
+            filename = job_material_filename(job, material_kind, material_format)
             root = self.config.get("materials_path", "data/materials")
             file_path = write_material_artifact(payload["job_id"], filename, str(content), root=root)
         return self.repo.save_material(
             payload["job_id"],
-            payload["kind"],
+            material_kind,
             content,
             payload.get("rationale", ""),
             format=material_format,
             file_path=file_path,
             source=payload.get("source", "agent"),
-            metadata=payload.get("metadata", {}),
+            metadata=metadata,
         )
 
     def _create_resume_typst(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1319,12 +1340,7 @@ class AgentToolbox:
 
 
 def normalize_material_format(value: Any) -> str:
-    material_format = str(value or "text").strip().lower()
-    if material_format in {"latex", "ltx"}:
-        return "tex"
-    if material_format in {"typst"}:
-        return "typ"
-    return material_format
+    return normalize_material_format_for_db(value)
 
 
 def parse_bool(value: Any, name: str, *, default: bool | None = None) -> bool:

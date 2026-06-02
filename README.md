@@ -201,4 +201,4 @@ Keep `docs/` public-safe. Local-only secrets, private profile notes, generated
 materials, and machine-specific runtime data belong in ignored config/profile
 files, not in repo documentation.
 
-See [Privacy.md](Privacy.md).
+See [Privacy.md](/Users/prashantshah/Desktop/Prashant/Prashant%20Gallery/Code/hermes-jobapps/Privacy.md).

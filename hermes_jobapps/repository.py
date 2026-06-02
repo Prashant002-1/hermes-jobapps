@@ -638,39 +638,92 @@ class JobRepository:
 
     def create_job(self, job: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()
-        job_id = uuid.uuid4().hex[:12]
         eval_id = uuid.uuid4().hex[:12]
         evaluation = dict(evaluation)
-        evaluation["job_id"] = job_id
+        title = job.get("title") or evaluation.get("facts", {}).get("title") or "Untitled role"
+        company = job.get("company") or evaluation.get("facts", {}).get("company") or "Unknown company"
+        location = job.get("location") or evaluation.get("facts", {}).get("location") or ""
+        url = job.get("url") or ""
+        description = job.get("description") or ""
+        user_notes = job.get("user_notes") or ""
         with self._connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO jobs (
-                    id, title, company, location, url, description, user_notes,
-                    status, role_family, decision, score, next_action,
-                    hermes_session_id, hermes_run_id, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_id,
-                    job.get("title") or evaluation.get("facts", {}).get("title") or "Untitled role",
-                    job.get("company") or evaluation.get("facts", {}).get("company") or "Unknown company",
-                    job.get("location") or evaluation.get("facts", {}).get("location") or "",
-                    job.get("url") or "",
-                    job.get("description") or "",
-                    job.get("user_notes") or "",
-                    job.get("status") or "new",
-                    evaluation.get("role_family"),
-                    evaluation.get("decision"),
-                    evaluation.get("score_0_to_5"),
-                    evaluation.get("next_action"),
-                    job.get("hermes_session_id") or evaluation.get("hermes_session_id"),
-                    job.get("hermes_run_id") or evaluation.get("hermes_run_id"),
-                    now,
-                    now,
-                ),
+            existing_job_id = _find_existing_job_for_create(
+                conn,
+                job_id=str(job.get("id") or job.get("job_id") or ""),
+                title=title,
+                company=company,
+                url=url,
+                description=description,
             )
+            job_id = existing_job_id or uuid.uuid4().hex[:12]
+            evaluation["job_id"] = job_id
+            if existing_job_id:
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET title = COALESCE(NULLIF(?, ''), title),
+                        company = COALESCE(NULLIF(?, ''), company),
+                        location = COALESCE(NULLIF(?, ''), location),
+                        url = COALESCE(NULLIF(?, ''), url),
+                        description = COALESCE(NULLIF(?, ''), description),
+                        user_notes = COALESCE(NULLIF(?, ''), user_notes),
+                        status = COALESCE(NULLIF(?, ''), status),
+                        role_family = COALESCE(?, role_family),
+                        decision = COALESCE(?, decision),
+                        score = COALESCE(?, score),
+                        next_action = COALESCE(?, next_action),
+                        hermes_session_id = COALESCE(NULLIF(?, ''), hermes_session_id),
+                        hermes_run_id = COALESCE(NULLIF(?, ''), hermes_run_id),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        title,
+                        company,
+                        location,
+                        url,
+                        description,
+                        user_notes,
+                        job.get("status") or "",
+                        evaluation.get("role_family"),
+                        evaluation.get("decision"),
+                        evaluation.get("score_0_to_5"),
+                        evaluation.get("next_action"),
+                        job.get("hermes_session_id") or evaluation.get("hermes_session_id") or "",
+                        job.get("hermes_run_id") or evaluation.get("hermes_run_id") or "",
+                        now,
+                        job_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO jobs (
+                        id, title, company, location, url, description, user_notes,
+                        status, role_family, decision, score, next_action,
+                        hermes_session_id, hermes_run_id, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        job_id,
+                        title,
+                        company,
+                        location,
+                        url,
+                        description,
+                        user_notes,
+                        job.get("status") or "new",
+                        evaluation.get("role_family"),
+                        evaluation.get("decision"),
+                        evaluation.get("score_0_to_5"),
+                        evaluation.get("next_action"),
+                        job.get("hermes_session_id") or evaluation.get("hermes_session_id"),
+                        job.get("hermes_run_id") or evaluation.get("hermes_run_id"),
+                        now,
+                        now,
+                    ),
+                )
             conn.execute(
                 "INSERT INTO evaluations (id, job_id, payload, created_at) VALUES (?, ?, ?, ?)",
                 (eval_id, job_id, json.dumps(evaluation), now),
@@ -681,20 +734,21 @@ class JobRepository:
             )
             self._record_brain_event_conn(
                 conn,
-                event_type="opportunity_created",
-                title=f"{job.get('title') or evaluation.get('facts', {}).get('title') or 'Untitled role'} at {job.get('company') or evaluation.get('facts', {}).get('company') or 'Unknown company'}",
-                content=job.get("description") or "",
+                event_type="opportunity_updated" if existing_job_id else "opportunity_created",
+                title=f"{title} at {company}",
+                content=description,
                 job_id=job_id,
                 entity_type="company",
-                entity_title=job.get("company") or evaluation.get("facts", {}).get("company") or "Unknown company",
+                entity_title=company,
                 source="local_prepare",
                 confidence=0.8,
-                importance=0.68,
+                importance=0.5 if existing_job_id else 0.68,
                 occurred_at=now,
                 metadata={
                     "decision": evaluation.get("decision"),
                     "role_family": evaluation.get("role_family"),
                     "next_action": evaluation.get("next_action"),
+                    "deduped_existing_job": bool(existing_job_id),
                 },
             )
         return self.get_job(job_id)
@@ -740,6 +794,15 @@ class JobRepository:
         now = utc_now()
         material_id = uuid.uuid4().hex[:12]
         serialized = content if isinstance(content, str) else json.dumps(content, indent=2)
+        clean_format = normalize_material_format_for_db(format)
+        clean_kind = normalize_material_kind_for_db(kind, format=clean_format, file_path=file_path, content=content)
+        clean_metadata = dict(metadata or {})
+        content_metadata = material_payload_metadata(content)
+        for key in ("pdf_path", "source_path", "source_format", "template", "display_name", "filename", "name"):
+            if content_metadata.get(key) and not clean_metadata.get(key):
+                clean_metadata[key] = content_metadata[key]
+        if clean_format == "pdf" and not file_path and content_metadata.get("pdf_path"):
+            file_path = str(content_metadata["pdf_path"])
         with self._connect() as conn:
             conn.execute(
                 """
@@ -752,13 +815,13 @@ class JobRepository:
                 (
                     material_id,
                     job_id,
-                    kind,
-                    format,
+                    clean_kind,
+                    clean_format,
                     serialized,
                     file_path,
                     rationale,
                     source,
-                    json.dumps(metadata or {}),
+                    json.dumps(clean_metadata),
                     now,
                     now,
                 ),
@@ -770,23 +833,23 @@ class JobRepository:
                 content=serialized[:12000],
                 job_id=job_id,
                 entity_type="material",
-                entity_title=kind,
+                entity_title=clean_kind,
                 source=source,
                 confidence=0.8,
                 importance=0.55,
                 occurred_at=now,
-                metadata={"material_id": material_id, "format": format, "file_path": file_path},
+                metadata={"material_id": material_id, "format": clean_format, "file_path": file_path},
             )
         return {
             "id": material_id,
             "job_id": job_id,
-            "kind": kind,
-            "format": format,
+            "kind": clean_kind,
+            "format": clean_format,
             "content": serialized,
             "file_path": file_path,
             "rationale": rationale,
             "source": source,
-            "metadata": metadata or {},
+            "metadata": clean_metadata,
         }
 
     def get_material(self, material_id: str) -> dict[str, Any]:
@@ -3995,7 +4058,7 @@ def _materials_workbench(materials: list[dict[str, Any]], revisions: list[dict[s
         "items": items,
         "primary": primary,
         "revision_count": len(revisions),
-        "can_compile": any(item.get("format") == "tex" for item in items),
+        "can_compile": any(item.get("format") in {"tex", "typ"} for item in items),
         "note": "Materials are app-owned artifacts. External use still requires approval.",
     }
 
@@ -4036,14 +4099,18 @@ def _material_summary(
 def _material_existing_pdf_path(material: dict[str, Any]) -> str:
     metadata = material.get("metadata") or {}
     compile_info = metadata.get("compile") or {}
+    content_metadata = material_payload_metadata(material.get("content"))
     candidates = [
         compile_info.get("pdf_path"),
         metadata.get("pdf_path"),
+        content_metadata.get("pdf_path"),
     ]
     file_path = str(material.get("file_path") or "")
     if file_path:
         source_path = Path(file_path).expanduser()
-        if source_path.suffix.lower() in {".tex", ".ltx"}:
+        if source_path.suffix.lower() == ".pdf":
+            candidates.append(str(source_path))
+        if source_path.suffix.lower() in {".tex", ".ltx", ".typ", ".typst"}:
             candidates.append(str(source_path.with_suffix(".pdf")))
     for candidate in candidates:
         if not candidate:
@@ -4056,13 +4123,14 @@ def _material_existing_pdf_path(material: dict[str, Any]) -> str:
 
 def _material_display_name(material: dict[str, Any]) -> str:
     metadata = material.get("metadata") or {}
+    content_metadata = material_payload_metadata(material.get("content"))
     for key in ("display_name", "filename", "name"):
         if metadata.get(key):
             return Path(str(metadata[key])).name
     file_path = str(material.get("file_path") or "")
     if file_path:
         return Path(file_path).name
-    pdf_path = str((metadata.get("compile") or {}).get("pdf_path") or metadata.get("pdf_path") or "")
+    pdf_path = str((metadata.get("compile") or {}).get("pdf_path") or metadata.get("pdf_path") or content_metadata.get("pdf_path") or "")
     if pdf_path:
         return Path(pdf_path).name
     if metadata.get("subject"):
@@ -4629,6 +4697,133 @@ def normalize_space_for_db(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
+def normalize_material_format_for_db(value: Any) -> str:
+    material_format = str(value or "text").strip().lower()
+    if material_format in {"latex", "ltx"}:
+        return "tex"
+    if material_format == "typst":
+        return "typ"
+    if material_format == "plain":
+        return "text"
+    return material_format or "text"
+
+
+def normalize_material_kind_for_db(
+    value: Any,
+    *,
+    format: str = "",
+    file_path: str = "",
+    content: Any = None,
+) -> str:
+    kind = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    aliases = {
+        "resume_typst_final": "resume",
+        "resume_tex_final": "resume",
+        "resume_pdf_final": "resume",
+        "resume_final": "resume",
+        "final_resume": "resume",
+        "compiled_resume": "resume",
+        "upload_resume": "resume",
+        "uploadable_resume": "resume",
+        "cover_letter_final": "cover_letter",
+        "final_cover_letter": "cover_letter",
+        "compiled_cover_letter": "cover_letter",
+    }
+    if kind in aliases:
+        return aliases[kind]
+    if kind.startswith("resume_") and any(token in kind for token in ("final", "compiled", "upload")):
+        return "resume"
+    if kind.startswith("cover") and any(token in kind for token in ("final", "compiled", "upload")):
+        return "cover_letter"
+    if not kind and (format == "pdf" or str(file_path).lower().endswith(".pdf")):
+        content_metadata = material_payload_metadata(content)
+        source = " ".join(str(content_metadata.get(key) or "") for key in ("source_format", "source_path", "pdf_path"))
+        if "resume" in source.lower():
+            return "resume"
+    return kind or "material"
+
+
+def material_payload_metadata(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    text = value.strip()
+    if not text or text[0] not in "{[":
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _find_existing_job_for_create(
+    conn: sqlite3.Connection,
+    *,
+    job_id: str,
+    title: str,
+    company: str,
+    url: str,
+    description: str,
+) -> str:
+    if job_id:
+        row = conn.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is not None:
+            return str(row["id"])
+
+    normalized_url = normalize_job_url_for_match(url)
+    title_key = normalize_space_for_db(title).casefold()
+    company_key = normalize_space_for_db(company).casefold()
+    description_key = normalize_job_description_for_match(description)
+    if normalized_url:
+        rows = conn.execute(
+            "SELECT id, title, company, url, description FROM jobs WHERE COALESCE(url, '') <> '' ORDER BY updated_at DESC"
+        ).fetchall()
+        for row in rows:
+            if normalize_job_url_for_match(row["url"]) == normalized_url:
+                same_title_company = (
+                    title_key
+                    and company_key
+                    and normalize_space_for_db(row["title"]).casefold() == title_key
+                    and normalize_space_for_db(row["company"]).casefold() == company_key
+                )
+                same_description = (
+                    description_key
+                    and normalize_job_description_for_match(row["description"]) == description_key
+                )
+                if same_title_company or same_description:
+                    return str(row["id"])
+
+    if not title_key or not company_key or not description_key:
+        return ""
+    rows = conn.execute(
+        """
+        SELECT id, description
+        FROM jobs
+        WHERE lower(title) = lower(?) AND lower(company) = lower(?)
+        ORDER BY updated_at DESC, created_at DESC
+        """,
+        (title, company),
+    ).fetchall()
+    for row in rows:
+        if normalize_job_description_for_match(row["description"]) == description_key:
+            return str(row["id"])
+    return ""
+
+
+def normalize_job_url_for_match(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text.rstrip("/").casefold()
+
+
+def normalize_job_description_for_match(value: str) -> str:
+    text = normalize_space_for_db(value).casefold()
+    return text if len(text) >= 80 else ""
+
+
 def normalize_action_title(value: str) -> str:
     return normalize_space_for_db(value).casefold()
 
@@ -4838,6 +5033,24 @@ def decode_prompt(row: sqlite3.Row) -> dict[str, Any]:
 def decode_material(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["metadata"] = json.loads(item.get("metadata") or "{}")
+    raw_format = item.get("format") or ""
+    clean_format = normalize_material_format_for_db(raw_format)
+    clean_kind = normalize_material_kind_for_db(
+        item.get("kind"),
+        format=clean_format,
+        file_path=item.get("file_path") or "",
+        content=item.get("content"),
+    )
+    if clean_kind != item.get("kind"):
+        item["raw_kind"] = item.get("kind")
+        item["kind"] = clean_kind
+    if clean_format != raw_format:
+        item["raw_format"] = raw_format
+        item["format"] = clean_format
+    content_metadata = material_payload_metadata(item.get("content"))
+    for key in ("pdf_path", "source_path", "source_format", "template", "display_name", "filename", "name"):
+        if content_metadata.get(key) and not item["metadata"].get(key):
+            item["metadata"][key] = content_metadata[key]
     return item
 
 

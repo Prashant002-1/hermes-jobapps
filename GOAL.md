@@ -59,7 +59,7 @@ This means the cockpit should optimize for speed after paste:
 8. Pick one positioning angle.
 9. Record `portrayal_decisions` that explain how the JD changed material framing.
 10. Apply and record `learning_patterns` from user corrections.
-11. Generate TeX resume and cover-letter artifacts.
+11. Generate Typst resume artifacts and TeX cover-letter artifacts.
 12. Compile PDFs when possible.
 13. Show diffs, provenance, and rationale.
 14. Stop at explicit human approval.

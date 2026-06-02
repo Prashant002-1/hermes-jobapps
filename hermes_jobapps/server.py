@@ -651,10 +651,13 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
         def _material_file_path(self, material: dict[str, Any], target: str) -> Path:
             metadata = material.get("metadata") if isinstance(material.get("metadata"), dict) else {}
             compile_info = metadata.get("compile") if isinstance(metadata.get("compile"), dict) else {}
+            content_metadata = _material_payload_metadata(material.get("content"))
             if target == "pdf":
-                candidates = [compile_info.get("pdf_path"), metadata.get("pdf_path")]
+                candidates = [compile_info.get("pdf_path"), metadata.get("pdf_path"), content_metadata.get("pdf_path")]
                 source_path = Path(str(material.get("file_path") or "")).expanduser()
-                if source_path.suffix.lower() in {".tex", ".ltx"}:
+                if source_path.suffix.lower() == ".pdf":
+                    candidates.append(str(source_path))
+                if source_path.suffix.lower() in {".tex", ".ltx", ".typ", ".typst"}:
                     candidates.append(str(source_path.with_suffix(".pdf")))
                 for candidate in candidates:
                     if not candidate:
@@ -673,7 +676,7 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
 
         def _serve_local_artifact(self, path: Path, *, root: Path, head: bool = False) -> None:
             content_type = mimetypes.guess_type(path.name)[0] or "text/plain"
-            if path.suffix.lower() in {".tex", ".ltx", ".md", ".txt", ".log"}:
+            if path.suffix.lower() in {".tex", ".ltx", ".typ", ".typst", ".md", ".txt", ".log"}:
                 content_type = "text/plain; charset=utf-8"
             self._serve_file(path, content_type, root=root, head=head, inline_name=path.name)
 
@@ -712,6 +715,21 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
 def _normalize_cockpit_status(value: Any) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_")
     return COCKPIT_STATUS_ALIASES.get(normalized, normalized)
+
+
+def _material_payload_metadata(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return {}
+    text = value.strip()
+    if not text or text[0] not in "{[":
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _normalize_action_item_status(value: Any) -> str:

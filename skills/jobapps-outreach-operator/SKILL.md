@@ -84,7 +84,7 @@ Clear and efficient. Confirm interest, fit, availability, and attach or mention 
 
 ### Gmail draft
 
-Creating a Gmail draft is allowed when useful. Never send. Use the applicant's preferred email unless they tell you a school or alumni context needs a different address.
+Creating a Gmail draft is allowed when useful. Never send. Use the applicant's preferred contact address from local profile/configuration.
 
 ## Strategy
 
