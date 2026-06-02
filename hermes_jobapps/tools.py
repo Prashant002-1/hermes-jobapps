@@ -24,6 +24,7 @@ from .networking import NetworkingService
 from .repository import (
     ACTIVE_HERMES_RUN_STATUSES,
     JobRepository,
+    TOOL_CALL_INLINE_LIMIT_BYTES,
     normalize_material_format_for_db,
     normalize_material_kind_for_db,
 )
@@ -42,6 +43,21 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "description": "Inspect JobApps database counts and stale or unattached records before real workflow use.",
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
         "writes": False,
+    },
+    {
+        "name": "jobapps_tool_call_retention",
+        "description": "Preview or archive old inline tool-call audit payloads without deleting core workflow state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "retain_days": {"type": "integer"},
+                "limit": {"type": "integer"},
+                "min_bytes": {"type": "integer"},
+                "apply": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        },
+        "writes": True,
     },
     {
         "name": "jobapps_brain_context",
@@ -703,6 +719,7 @@ class AgentToolbox:
         self._handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "jobapps_read_context": self._read_context,
             "jobapps_database_health": self._database_health,
+            "jobapps_tool_call_retention": self._tool_call_retention,
             "jobapps_brain_context": self._brain_context,
             "jobapps_search_brain": self._search_brain,
             "jobapps_upsert_brain_entity": self._upsert_brain_entity,
@@ -768,6 +785,31 @@ class AgentToolbox:
 
     def _database_health(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.repo.database_health()
+
+    def _tool_call_retention(self, payload: dict[str, Any]) -> dict[str, Any]:
+        retain_days = parse_limit(payload.get("retain_days", 30), default=30, maximum=3650)
+        limit = parse_limit(payload.get("limit", 100), default=100, maximum=2000)
+        min_bytes = parse_limit(
+            payload.get("min_bytes", TOOL_CALL_INLINE_LIMIT_BYTES),
+            default=TOOL_CALL_INLINE_LIMIT_BYTES,
+            maximum=1_000_000_000,
+        )
+        apply_changes = parse_bool(payload.get("apply", False), "apply", default=False)
+        if apply_changes:
+            return self.repo.archive_old_tool_calls(
+                retain_days=retain_days,
+                limit=limit,
+                min_bytes=min_bytes,
+                dry_run=False,
+            )
+        report = self.repo.tool_call_retention_report(retain_days=retain_days, limit=min(limit, 100))
+        preview = self.repo.archive_old_tool_calls(
+            retain_days=retain_days,
+            limit=limit,
+            min_bytes=min_bytes,
+            dry_run=True,
+        )
+        return report | {"cleanup_preview": preview}
 
     def _brain_context(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.repo.brain_context(

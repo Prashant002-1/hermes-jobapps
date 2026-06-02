@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import tempfile
 import threading
@@ -299,6 +300,38 @@ class RepositoryTests(unittest.TestCase):
 
             self.assertEqual(payload["state"]["jobs"][0]["status"], "applied")
             self.assertIn("watch for replies", payload["state"]["jobs"][0]["next_action"])
+
+    def test_state_endpoint_returns_versioned_gzip_payload_when_requested(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = AppState(None, str(Path(tmpdir) / "state.sqlite3"))
+            state.repo.create_job(
+                {
+                    "title": "Backend Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build APIs." * 500,
+                },
+                {"decision": "apply", "role_family": "backend"},
+            )
+            server = ThreadingHTTPServer(("127.0.0.1", 0), create_handler(state))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/state",
+                    headers={"Accept-Encoding": "gzip"},
+                )
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    encoded = response.read()
+                    content_encoding = response.headers.get("Content-Encoding")
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+
+            payload = json.loads(gzip.decompress(encoded).decode("utf-8"))
+            self.assertEqual(content_encoding, "gzip")
+            self.assertIn("state_version", payload)
+            self.assertEqual(payload["jobs"][0]["company"], "ExampleCo")
 
     def test_dashboard_exposes_lean_job_state_buckets_and_dates(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -713,6 +746,89 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(health["status"], "needs_attention")
             self.assertEqual(len(health["stale_records"]["unattached_followups"]), 1)
             self.assertEqual(len(health["stale_records"]["unattached_agent_runs"]), 1)
+
+    def test_database_health_summarizes_unattached_tool_calls_without_full_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            repo.record_tool_call("jobapps_read_context", {}, {"blob": "x" * 4000})
+
+            health = repo.database_health()
+            tool_call = health["stale_records"]["tool_calls_without_run"][0]
+
+            self.assertEqual(tool_call["tool_name"], "jobapps_read_context")
+            self.assertGreater(tool_call["output_bytes"], 4000)
+            self.assertFalse(tool_call["archived"])
+            self.assertNotIn("input", tool_call)
+            self.assertNotIn("output", tool_call)
+
+    def test_large_tool_call_payload_is_archived_out_of_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            repo.record_tool_call("jobapps_read_context", {"scope": "all"}, {"blob": "x" * 1_100_000})
+
+            call = repo.list_tool_calls(limit=1)[0]
+            archive_path = Path(call["output"]["archive_path"])
+
+            self.assertTrue(call["input"]["_archived_tool_call"])
+            self.assertTrue(call["output"]["_archived_tool_call"])
+            self.assertTrue(archive_path.exists())
+            with gzip.open(archive_path, "rt", encoding="utf-8") as handle:
+                archived = json.load(handle)
+            self.assertEqual(archived["tool_name"], "jobapps_read_context")
+            self.assertEqual(archived["output"]["blob"], "x" * 1_100_000)
+
+    def test_tool_call_retention_archives_old_inline_payloads_without_deleting_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            repo.record_tool_call("jobapps_read_context", {"old": True}, {"ok": True})
+            with repo._connect() as conn:
+                conn.execute("UPDATE tool_calls SET created_at = ?", ("2000-01-01T00:00:00+00:00",))
+
+            preview = repo.archive_old_tool_calls(retain_days=30, limit=10, dry_run=True)
+            before = repo.list_tool_calls(limit=1)[0]
+            applied = repo.archive_old_tool_calls(retain_days=30, limit=10, dry_run=False)
+            after = repo.list_tool_calls(limit=1)[0]
+
+            self.assertEqual(preview["candidate_count"], 1)
+            self.assertFalse(before["input"].get("_archived_tool_call", False))
+            self.assertEqual(applied["archived_count"], 1)
+            self.assertTrue(after["input"]["_archived_tool_call"])
+            self.assertEqual(len(repo.list_tool_calls(limit=10)), 1)
+
+    def test_tool_call_retention_can_target_recent_oversized_inline_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            repo.record_tool_call("jobapps_read_context", {}, {"blob": "x" * 2000})
+
+            preview = repo.archive_old_tool_calls(retain_days=30, limit=10, min_bytes=1000, dry_run=True)
+            applied = repo.archive_old_tool_calls(retain_days=30, limit=10, min_bytes=1000, dry_run=False)
+            after = repo.list_tool_calls(limit=1)[0]
+
+            self.assertEqual(preview["candidate_count"], 1)
+            self.assertEqual(applied["archived_count"], 1)
+            self.assertTrue(after["output"]["_archived_tool_call"])
+
+    def test_app_state_cache_invalidates_after_repository_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state = AppState(None, str(Path(tmpdir) / "state.sqlite3"))
+            initial_meta = state.state_meta()
+            first = state.full_state()
+            cached = state.full_state()
+
+            state.repo.create_job(
+                {
+                    "title": "Backend Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build APIs.",
+                },
+                {"decision": "apply", "role_family": "backend"},
+            )
+            updated = state.full_state()
+
+            self.assertIs(first, cached)
+            self.assertGreater(state.state_meta()["state_version"], initial_meta["state_version"])
+            self.assertNotEqual(first["state_version"], updated["state_version"])
+            self.assertEqual(updated["jobs"][0]["company"], "ExampleCo")
 
     def test_repository_closes_connections_under_repeated_operations(self) -> None:
         fd_dir = Path("/dev/fd")

@@ -6,15 +6,16 @@ into this schema, but runtime workflows should read and write structured rows.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 
 ACTION_CLOSED_STATUSES = ("done", "closed", "complete", "completed", "dismissed", "not_needed", "canceled", "cancelled")
@@ -44,11 +45,14 @@ JOB_APPLIED_STATUSES = {
 JOB_SKIP_STATUSES = {"skip", "skipped", "not_interested", "not_needed"}
 MATERIAL_REVIEW_STATUSES = {"materials_ready_for_review"}
 ACTION_RESOLVED_STATUSES = set(ACTION_CLOSED_STATUSES) | {"approved", "rejected", "superseded"}
+TOOL_CALL_INLINE_LIMIT_BYTES = 1_000_000
+TOOL_CALL_ARCHIVE_ROOT = Path("data/tool-call-archive")
 
 
 class JobRepository:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self.on_change: Callable[[], None] | None = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init()
 
@@ -60,8 +64,14 @@ class JobRepository:
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=30000")
+            before_changes = conn.total_changes
             yield conn
             conn.commit()
+            if conn.total_changes > before_changes and self.on_change is not None:
+                try:
+                    self.on_change()
+                except Exception:
+                    pass
         except Exception:
             conn.rollback()
             raise
@@ -531,6 +541,7 @@ class JobRepository:
             )
             self._ensure_columns(conn)
             self._ensure_contact_indexes(conn)
+            self._ensure_performance_indexes(conn)
             self._ensure_retrieval_index(conn)
             self._ensure_brain_index(conn)
             self._backfill_retrieval_chunks(conn)
@@ -607,6 +618,36 @@ class JobRepository:
     def _ensure_contact_indexes(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_source_url ON contacts(source_url)")
+
+    @staticmethod
+    def _ensure_performance_indexes(conn: sqlite3.Connection) -> None:
+        """Keep the fully hydrated dashboard path index-backed as data grows."""
+
+        indexes = (
+            "CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_evaluations_job_created ON evaluations(job_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_events_job_id ON events(job_id, id)",
+            "CREATE INDEX IF NOT EXISTS idx_materials_job_created ON materials(job_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_prompt_builds_created ON prompt_builds(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_prompt_builds_job_created ON prompt_builds(job_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_research_notes_job_created ON research_notes(job_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_application_changes_job_created ON application_changes(job_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_progress_items_job_created ON progress_items(job_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_progress_items_due_created ON progress_items(due_date, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_followups_job_due_created ON followups(job_id, due_date, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_followups_due_created ON followups(due_date, created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_approvals_job_updated ON approvals(job_id, updated_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_approvals_status_updated ON approvals(status, updated_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_runs_updated ON agent_runs(updated_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_runs_job_created ON agent_runs(job_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_agent_run_events_run_created ON agent_run_events(run_id, created_at DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_tool_calls_run_created ON tool_calls(run_id, created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_tool_calls_unattached_created ON tool_calls(created_at DESC) WHERE run_id IS NULL",
+            "CREATE INDEX IF NOT EXISTS idx_contacts_company_lookup ON contacts(lower(COALESCE(company, '')), updated_at DESC)",
+        )
+        for sql in indexes:
+            conn.execute(sql)
 
     def _ensure_retrieval_index(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -2399,10 +2440,13 @@ class JobRepository:
                     ).fetchall()
                 ],
                 "tool_calls_without_run": [
-                    decode_tool_call(row)
+                    decode_tool_call_summary(row)
                     for row in conn.execute(
                         """
-                        SELECT * FROM tool_calls
+                        SELECT id, run_id, tool_name, status, created_at,
+                               length(CAST(input AS BLOB)) AS input_bytes,
+                               length(CAST(output AS BLOB)) AS output_bytes
+                        FROM tool_calls
                         WHERE run_id IS NULL
                         ORDER BY created_at DESC
                         LIMIT 20
@@ -3783,6 +3827,15 @@ class JobRepository:
     ) -> dict[str, Any]:
         now = utc_now()
         call_id = uuid.uuid4().hex[:12]
+        input_json, output_json = self._stored_tool_call_payloads(
+            call_id,
+            tool_name,
+            input_payload,
+            output_payload,
+            status=status,
+            run_id=run_id,
+            created_at=now,
+        )
         with self._connect() as conn:
             conn.execute(
                 """
@@ -3793,8 +3846,8 @@ class JobRepository:
                     call_id,
                     run_id,
                     tool_name,
-                    json.dumps(input_payload),
-                    json.dumps(output_payload),
+                    input_json,
+                    output_json,
                     status,
                     now,
                 ),
@@ -3809,6 +3862,75 @@ class JobRepository:
             "created_at": now,
         }
 
+    def _stored_tool_call_payloads(
+        self,
+        call_id: str,
+        tool_name: str,
+        input_payload: dict[str, Any],
+        output_payload: dict[str, Any],
+        *,
+        status: str,
+        run_id: str | None,
+        created_at: str,
+    ) -> tuple[str, str]:
+        input_json = json.dumps(input_payload)
+        output_json = json.dumps(output_payload)
+        total_bytes = len(input_json.encode("utf-8")) + len(output_json.encode("utf-8"))
+        if total_bytes <= TOOL_CALL_INLINE_LIMIT_BYTES:
+            return input_json, output_json
+
+        archive_path = self._archive_tool_call_payload(
+            call_id,
+            tool_name,
+            input_payload,
+            output_payload,
+            status=status,
+            run_id=run_id,
+            created_at=created_at,
+            input_bytes=len(input_json.encode("utf-8")),
+            output_bytes=len(output_json.encode("utf-8")),
+        )
+        marker = _tool_call_archive_marker(
+            archive_path,
+            input_bytes=len(input_json.encode("utf-8")),
+            output_bytes=len(output_json.encode("utf-8")),
+            inline_limit_bytes=TOOL_CALL_INLINE_LIMIT_BYTES,
+        )
+        return json.dumps(marker | {"payload": "input"}), json.dumps(marker | {"payload": "output"})
+
+    def _archive_tool_call_payload(
+        self,
+        call_id: str,
+        tool_name: str,
+        input_payload: dict[str, Any],
+        output_payload: dict[str, Any],
+        *,
+        status: str,
+        run_id: str | None,
+        created_at: str,
+        input_bytes: int,
+        output_bytes: int,
+    ) -> str:
+        archive_root = self.path.parent / TOOL_CALL_ARCHIVE_ROOT.name
+        archive_root.mkdir(parents=True, exist_ok=True)
+        safe_tool = re.sub(r"[^a-zA-Z0-9_.-]+", "_", tool_name).strip("_") or "tool"
+        safe_date = created_at[:10] if created_at else "unknown-date"
+        archive_path = archive_root / f"{safe_date}-{call_id}-{safe_tool}.json.gz"
+        payload = {
+            "id": call_id,
+            "run_id": run_id,
+            "tool_name": tool_name,
+            "status": status,
+            "created_at": created_at,
+            "input_bytes": input_bytes,
+            "output_bytes": output_bytes,
+            "input": input_payload,
+            "output": output_payload,
+        }
+        with gzip.open(archive_path, "wt", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"))
+        return str(archive_path)
+
     def list_tool_calls(self, run_id: str | None = None, limit: int = 80) -> list[dict[str, Any]]:
         with self._connect() as conn:
             if run_id:
@@ -3822,6 +3944,164 @@ class JobRepository:
         for row in rows:
             output.append(decode_tool_call(row))
         return output
+
+    def tool_call_retention_report(self, *, retain_days: int = 30, limit: int = 20) -> dict[str, Any]:
+        retain_days = max(1, int(retain_days or 30))
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retain_days)).isoformat()
+        payload_size_sql = "length(CAST(input AS BLOB)) + length(CAST(output AS BLOB))"
+        with self._connect() as conn:
+            total = conn.execute(
+                """
+                SELECT COUNT(*) AS count,
+                       COALESCE(SUM(length(CAST(input AS BLOB)) + length(CAST(output AS BLOB))), 0) AS bytes
+                FROM tool_calls
+                """
+            ).fetchone()
+            old = conn.execute(
+                """
+                SELECT COUNT(*) AS count,
+                       COALESCE(SUM(length(CAST(input AS BLOB)) + length(CAST(output AS BLOB))), 0) AS bytes
+                FROM tool_calls
+                WHERE created_at < ?
+                """,
+                (cutoff,),
+            ).fetchone()
+            oversized = conn.execute(
+                f"""
+                SELECT COUNT(*) AS count, COALESCE(SUM({payload_size_sql}), 0) AS bytes
+                FROM tool_calls
+                WHERE {payload_size_sql} > ?
+                """,
+                (TOOL_CALL_INLINE_LIMIT_BYTES,),
+            ).fetchone()
+            largest = [
+                decode_tool_call_summary(row)
+                for row in conn.execute(
+                    """
+                    SELECT id, run_id, tool_name, status, created_at,
+                           length(CAST(input AS BLOB)) AS input_bytes,
+                           length(CAST(output AS BLOB)) AS output_bytes
+                    FROM tool_calls
+                    ORDER BY length(CAST(input AS BLOB)) + length(CAST(output AS BLOB)) DESC
+                    LIMIT ?
+                    """,
+                    (bounded_limit(limit, default=20, maximum=100),),
+                ).fetchall()
+            ]
+            by_tool = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT tool_name, COUNT(*) AS count,
+                           COALESCE(SUM(length(CAST(input AS BLOB)) + length(CAST(output AS BLOB))), 0) AS bytes
+                    FROM tool_calls
+                    GROUP BY tool_name
+                    ORDER BY bytes DESC
+                    LIMIT 20
+                    """
+                ).fetchall()
+            ]
+        return {
+            "retain_days": retain_days,
+            "cutoff": cutoff,
+            "total": {"count": int(total["count"]), "bytes": int(total["bytes"])},
+            "older_than_cutoff": {"count": int(old["count"]), "bytes": int(old["bytes"])},
+            "oversized_inline": {
+                "min_bytes": TOOL_CALL_INLINE_LIMIT_BYTES,
+                "count": int(oversized["count"]),
+                "bytes": int(oversized["bytes"]),
+            },
+            "largest": largest,
+            "by_tool": by_tool,
+            "policy": {
+                "core_state": "jobs, materials, contacts, proof points, decisions, follow-ups, progress, and learning patterns are retained",
+                "audit_payloads": "large tool call input/output JSON is archived to compressed local files before inline SQLite cleanup",
+                "default_mode": "dry_run",
+            },
+        }
+
+    def archive_old_tool_calls(
+        self,
+        *,
+        retain_days: int = 30,
+        limit: int = 100,
+        min_bytes: int | None = None,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        retain_days = max(1, int(retain_days or 30))
+        row_limit = bounded_limit(limit, default=100, maximum=2000)
+        min_bytes = int(min_bytes) if min_bytes is not None else None
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=retain_days)).isoformat()
+        payload_size_sql = "length(CAST(input AS BLOB)) + length(CAST(output AS BLOB))"
+        if min_bytes is None:
+            where_sql = "created_at < ?"
+            params: tuple[Any, ...] = (cutoff, row_limit)
+        else:
+            where_sql = f"(created_at < ? OR {payload_size_sql} > ?)"
+            params = (cutoff, max(1, min_bytes), row_limit)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM tool_calls
+                WHERE {where_sql}
+                ORDER BY created_at
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            candidates = [row for row in rows if not _tool_call_row_archived(row)]
+            summaries = [decode_tool_call_summary(row) for row in candidates]
+            if dry_run:
+                return {
+                    "dry_run": True,
+                    "retain_days": retain_days,
+                    "cutoff": cutoff,
+                    "min_bytes": min_bytes,
+                    "candidate_count": len(candidates),
+                    "candidate_bytes": sum(item.get("input_bytes", 0) + item.get("output_bytes", 0) for item in summaries),
+                    "candidates": summaries,
+                }
+            archived = []
+            for row in candidates:
+                item = decode_tool_call(row)
+                input_json = json.dumps(item["input"])
+                output_json = json.dumps(item["output"])
+                archive_path = self._archive_tool_call_payload(
+                    item["id"],
+                    item["tool_name"],
+                    item["input"],
+                    item["output"],
+                    status=item["status"],
+                    run_id=item.get("run_id"),
+                    created_at=item["created_at"],
+                    input_bytes=len(input_json.encode("utf-8")),
+                    output_bytes=len(output_json.encode("utf-8")),
+                )
+                marker = _tool_call_archive_marker(
+                    archive_path,
+                    input_bytes=len(input_json.encode("utf-8")),
+                    output_bytes=len(output_json.encode("utf-8")),
+                    inline_limit_bytes=TOOL_CALL_INLINE_LIMIT_BYTES,
+                )
+                conn.execute(
+                    "UPDATE tool_calls SET input = ?, output = ? WHERE id = ?",
+                    (
+                        json.dumps(marker | {"payload": "input"}),
+                        json.dumps(marker | {"payload": "output"}),
+                        item["id"],
+                    ),
+                )
+                archived.append(decode_tool_call_summary(row) | {"archive_path": archive_path})
+        return {
+            "dry_run": False,
+            "retain_days": retain_days,
+            "cutoff": cutoff,
+            "min_bytes": min_bytes,
+            "archived_count": len(archived),
+            "archived_bytes": sum(item.get("input_bytes", 0) + item.get("output_bytes", 0) for item in archived),
+            "archived": archived,
+            "next_step": "Run SQLite VACUUM during maintenance if you need the database file itself to shrink after archiving.",
+        }
 
     def _upsert_brain_entity_conn(
         self,
@@ -5082,6 +5362,56 @@ def decode_tool_call(row: sqlite3.Row) -> dict[str, Any]:
     item["input"] = json.loads(item["input"])
     item["output"] = json.loads(item["output"])
     return item
+
+
+def decode_tool_call_summary(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    raw_input = item.pop("input", None)
+    raw_output = item.pop("output", None)
+    input_bytes = item.get("input_bytes")
+    output_bytes = item.get("output_bytes")
+    item["input_bytes"] = int(input_bytes if input_bytes is not None else len(str(raw_input or "").encode("utf-8")))
+    item["output_bytes"] = int(output_bytes if output_bytes is not None else len(str(raw_output or "").encode("utf-8")))
+    marker = _tool_call_marker_from_json(raw_input) or _tool_call_marker_from_json(raw_output)
+    item["archived"] = bool(marker)
+    if marker:
+        item["archive_path"] = marker.get("archive_path", "")
+        item["input_bytes"] = int(marker.get("input_bytes") or item["input_bytes"])
+        item["output_bytes"] = int(marker.get("output_bytes") or item["output_bytes"])
+    return item
+
+
+def _tool_call_archive_marker(
+    archive_path: str,
+    *,
+    input_bytes: int,
+    output_bytes: int,
+    inline_limit_bytes: int,
+) -> dict[str, Any]:
+    return {
+        "_archived_tool_call": True,
+        "archive_path": archive_path,
+        "input_bytes": input_bytes,
+        "output_bytes": output_bytes,
+        "inline_limit_bytes": inline_limit_bytes,
+    }
+
+
+def _tool_call_marker_from_json(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(decoded, dict) and decoded.get("_archived_tool_call"):
+        return decoded
+    return None
+
+
+def _tool_call_row_archived(row: sqlite3.Row) -> bool:
+    keys = set(row.keys()) if hasattr(row, "keys") else set(dict(row).keys())
+    return any(_tool_call_marker_from_json(row[key]) for key in ("input", "output") if key in keys)
 
 
 def _active_hermes_run(agent_runs: list[dict[str, Any]]) -> dict[str, Any] | None:

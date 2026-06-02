@@ -70,12 +70,22 @@ const actionsBoard = $("#actionsBoard");
 const actionsMessage = $("#actionsMessage");
 
 const CHAT_STATE_KEY = "hermes-jobapps.chatState.v1";
+const STATE_CACHE_DB = "hermes-jobapps.state.v1";
+const STATE_CACHE_STORE = "state";
+const STATE_CACHE_KEY = "latest";
 const MAX_SAVED_TURNS = 80;
 
 /* ── State ── */
 let messages = [];
 let currentJobId = null;
 let appState = null;
+let stateVersion = -1;
+let stateChangedAt = "";
+let stateRefreshInFlight = null;
+let stateEvents = null;
+let stateEventsRetryTimer = null;
+let statePollingTimer = null;
+let stateCacheOpen = null;
 let currentView = "dashboard";
 let commandCatalog = [];
 let commandGroups = [];
@@ -102,6 +112,7 @@ let pipelineMessage = "";
 let pipelineMessageKind = "";
 let pipelineMessageTimer = null;
 const pipelineExpanded = { applied: false, skip: false };
+const disclosureState = new Map();
 
 /* ── Helpers ── */
 const esc = (s) => {
@@ -137,6 +148,150 @@ const fetchJsonStrict = async (url) => {
     throw new Error(payload?.error || `Request failed (${res.status})`);
   }
   return payload;
+};
+
+const normalizedDisclosureText = (value) => String(value || "").trim().replace(/\s+/g, " ");
+
+const disclosureKey = (details) => {
+  const viewName = details.closest(".view")?.dataset.view || currentView || "global";
+  const explicit = details.dataset.disclosureKey;
+  if (explicit) return `${viewName}:${explicit}`;
+  const summary = normalizedDisclosureText(details.querySelector("summary")?.textContent);
+  const className = normalizedDisclosureText(details.className);
+  const siblings = Array.from((details.parentElement || document).querySelectorAll("details"));
+  return `${viewName}:fallback:${className}:${summary}:${siblings.indexOf(details)}`;
+};
+
+const captureDisclosureState = () => {
+  document.querySelectorAll("details").forEach((details) => {
+    disclosureState.set(disclosureKey(details), details.open);
+  });
+};
+
+const restoreDisclosureState = () => {
+  document.querySelectorAll("details").forEach((details) => {
+    const key = disclosureKey(details);
+    if (disclosureState.has(key)) details.open = Boolean(disclosureState.get(key));
+    details.addEventListener("toggle", () => {
+      disclosureState.set(key, details.open);
+    });
+  });
+};
+
+const openStateCache = () => {
+  if (!window.indexedDB) return Promise.resolve(null);
+  if (stateCacheOpen) return stateCacheOpen;
+  stateCacheOpen = new Promise((resolve) => {
+    const request = window.indexedDB.open(STATE_CACHE_DB, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(STATE_CACHE_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+  });
+  return stateCacheOpen;
+};
+
+const readCachedState = async () => {
+  const db = await openStateCache();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    const tx = db.transaction(STATE_CACHE_STORE, "readonly");
+    const request = tx.objectStore(STATE_CACHE_STORE).get(STATE_CACHE_KEY);
+    request.onsuccess = () => resolve(request.result?.payload || null);
+    request.onerror = () => resolve(null);
+  });
+};
+
+const writeCachedState = async (state) => {
+  const db = await openStateCache();
+  if (!db || !state) return;
+  const tx = db.transaction(STATE_CACHE_STORE, "readwrite");
+  tx.objectStore(STATE_CACHE_STORE).put(
+    {
+      payload: state,
+      saved_at: new Date().toISOString(),
+      state_version: state.state_version ?? null,
+    },
+    STATE_CACHE_KEY
+  );
+};
+
+const stateVersionNumber = (state) => {
+  const value = Number(state?.state_version);
+  return Number.isFinite(value) ? value : -1;
+};
+
+const stateMetaChanged = (meta) => {
+  const nextVersion = stateVersionNumber(meta);
+  if (nextVersion < 0) return false;
+  if (nextVersion !== stateVersion) return true;
+  return Boolean(meta?.state_changed_at && stateChangedAt && meta.state_changed_at !== stateChangedAt);
+};
+
+const applyState = (state, { render = true, persist = true } = {}) => {
+  if (!state) return false;
+  appState = state;
+  stateVersion = stateVersionNumber(state);
+  stateChangedAt = state.state_changed_at || "";
+  if (state?.jobs?.length && !currentJobId) currentJobId = state.jobs[0].id;
+  if (render) renderCurrentView();
+  if (persist) writeCachedState(state);
+  return true;
+};
+
+const loadFullState = async ({ render = true, persist = true } = {}) => {
+  const state = await fetchJson("/api/state");
+  if (!state) throw new Error("State unavailable");
+  applyState(state, { render, persist });
+  return state;
+};
+
+const refreshStateQuietly = async ({ render = true } = {}) => {
+  if (stateRefreshInFlight) return stateRefreshInFlight;
+  stateRefreshInFlight = loadFullState({ render, persist: true })
+    .catch(() => {
+      setRuntimeStatus("offline");
+      return null;
+    })
+    .finally(() => {
+      stateRefreshInFlight = null;
+    });
+  return stateRefreshInFlight;
+};
+
+const startStatePolling = () => {
+  if (statePollingTimer) return;
+  statePollingTimer = window.setInterval(async () => {
+    const meta = await fetchJson("/api/state/version");
+    if (stateMetaChanged(meta)) refreshStateQuietly();
+  }, 10000);
+};
+
+const startStateEvents = () => {
+  if (stateEvents || stateEventsRetryTimer) return;
+  if (!window.EventSource) {
+    startStatePolling();
+    return;
+  }
+  const url = stateVersion >= 0
+    ? `/api/state/events?after=${encodeURIComponent(stateVersion)}`
+    : "/api/state/events";
+  const source = new window.EventSource(url);
+  stateEvents = source;
+  source.addEventListener("state", (event) => {
+    const meta = JSON.parse(event.data || "{}");
+    if (stateMetaChanged(meta)) refreshStateQuietly();
+  });
+  source.onerror = () => {
+    source.close();
+    stateEvents = null;
+    stateEventsRetryTimer = window.setTimeout(() => {
+      stateEventsRetryTimer = null;
+      startStateEvents();
+      refreshStateQuietly();
+    }, 3000);
+  };
 };
 
 const copyText = async (text) => {
@@ -354,17 +509,7 @@ const switchView = (view) => {
   // Update views
   $$(".view").forEach((el) => el.classList.toggle("active", el.dataset.view === view));
 
-  // Render view-specific content
-  if (view === "dashboard") renderDashboard();
-  if (view === "actions") renderActions();
-  if (view === "brain") renderBrain();
-  if (view === "discovery") renderDiscovery();
-  if (view === "jobs") renderJobs();
-  if (view === "materials") renderMaterials();
-  if (view === "activity") renderActivity();
-  if (view === "criteria") renderCriteria();
-  if (view === "network") renderNetwork();
-  if (view === "sessions") renderSessions();
+  renderCurrentView();
   scrollCurrentViewToTop();
   saveChatState();
 };
@@ -1013,7 +1158,7 @@ const performActionDisposition = async (source, id, op, options = {}) => {
     setActionsMessage(result.error, "error");
     return;
   }
-  if (result?.state) appState = result.state;
+  if (result?.state) applyState(result.state, { render: false });
   setActionsMessage(op === "snooze" ? "snoozed" : "updated", "ok");
   renderCurrentView();
   saveChatState();
@@ -1104,13 +1249,12 @@ const updateJobStatus = async (jobId, status, note = "Updated from JobApps cockp
     renderCurrentView();
     return;
   }
-  if (result?.state) {
-    appState = result.state;
-  } else {
-    const state = await fetchJson("/api/state");
-    if (state) appState = state;
-  }
   currentJobId = jobId;
+  if (result?.state) {
+    applyState(result.state, { render: false });
+  } else {
+    await refreshStateQuietly({ render: false });
+  }
   setPipelineMessage(`Moved to ${label}`, "ok");
   renderCurrentView();
   saveChatState();
@@ -1584,6 +1728,7 @@ const renderLeadCard = (item) => {
     if (evidence.length) {
       const detail = document.createElement("details");
       detail.className = "discovery-detail";
+      detail.dataset.disclosureKey = `discovery:${item.id || item.url || item.title || "unknown"}:evidence`;
       detail.innerHTML = `
         <summary>evidence</summary>
         <div>${evidence.map((line) => `<p>${esc(line)}</p>`).join("")}</div>
@@ -1639,7 +1784,7 @@ const refreshDiscovery = async () => {
     fetchJson("/api/state"),
   ]);
   discoveryStatus = status || discoveryStatus;
-  if (state) appState = state;
+  if (state) applyState(state, { render: false });
   renderCurrentView();
 };
 
@@ -1784,8 +1929,7 @@ const startHermesRun = async (jobId) => {
     return;
   }
   currentJobId = jobId;
-  const state = await fetchJson("/api/state");
-  if (state) appState = state;
+  await refreshStateQuietly({ render: false });
   const status = result?.active_run?.status || "queued";
   setJobsMessage(`run ${humanize(status)}`, "ok");
   renderCurrentView();
@@ -1801,8 +1945,7 @@ const refreshHermesRun = async (jobId) => {
     return;
   }
   currentJobId = jobId;
-  const state = await fetchJson("/api/state");
-  if (state) appState = state;
+  await refreshStateQuietly({ render: false });
   setJobsMessage("refreshed", "ok");
   renderCurrentView();
   saveChatState();
@@ -1815,7 +1958,7 @@ const startPendingMaterialPrep = async () => {
     setJobsMessage(result.error, "error");
     return;
   }
-  if (result?.state) appState = result.state;
+  if (result?.state) applyState(result.state, { render: false });
   const queued = Number(result?.queued_count || 0);
   const existing = Number(result?.existing_count || 0);
   const failed = Number(result?.failed_count || 0);
@@ -2126,29 +2269,29 @@ const renderJobDetail = () => {
         <h3>Materials</h3>
         ${materialRows}
       </section>
-      <details class="job-detail-section wide detail-disclosure">
+      <details class="job-detail-section wide detail-disclosure" data-disclosure-key="job:${esc(job.id)}:tailoring-requirements">
         <summary><span>Tailoring Requirements</span><strong>${fmtNum(requirements.length)}</strong></summary>
         <h3>Tailoring Requirements</h3>
         ${requirementRows}
       </details>
-      <details class="job-detail-section wide detail-disclosure">
+      <details class="job-detail-section wide detail-disclosure" data-disclosure-key="job:${esc(job.id)}:job-signals">
         <summary><span>Job Signals</span><strong>${fmtNum(signals.length)}</strong></summary>
         <h3>Job Signals</h3>
         ${signalRows}
       </details>
-      <details class="job-detail-section wide detail-disclosure">
+      <details class="job-detail-section wide detail-disclosure" data-disclosure-key="job:${esc(job.id)}:portrayal-decisions">
         <summary><span>Portrayal Decisions</span><strong>${fmtNum(decisions.length)}</strong></summary>
         <h3>Portrayal Decisions</h3>
         ${decisionRows}
       </details>
-      <details class="job-detail-section wide detail-disclosure">
+      <details class="job-detail-section wide detail-disclosure" data-disclosure-key="job:${esc(job.id)}:network">
         <summary><span>Network</span><strong>${fmtNum(contacts.length + drafts.length + followups.length)}</strong></summary>
         <h3>Network</h3>
         ${draftRows}
         <h4>People</h4>
         ${contactRows}
       </details>
-      <details class="job-detail-section wide detail-disclosure">
+      <details class="job-detail-section wide detail-disclosure" data-disclosure-key="job:${esc(job.id)}:followups">
         <summary><span>Follow-ups</span><strong>${fmtNum(followups.length)}</strong></summary>
         <h3>Follow-ups</h3>
         ${followupRows}
@@ -2335,6 +2478,7 @@ const groupNetworkLaneItems = (items) => {
 const renderNetworkGroup = (group) => {
   const details = document.createElement("details");
   details.className = "network-group";
+  details.dataset.disclosureKey = `network:${group.key || group.label || "unknown"}`;
   details.open = group.items.length <= 3;
   const contacts = group.items.filter((item) => item.type === "contact").map((item) => item.contact || {});
   const missing = contacts.filter((contact) => (contact.email_status || (contact.email ? "found" : "missing")) !== "found").length;
@@ -2521,8 +2665,7 @@ const compileMaterial = async (materialId) => {
     barDot.classList.add("thinking");
     await postJson("/api/tools/jobapps_compile_material_pdf", { material_id: materialId });
     barDot.classList.remove("thinking");
-    const state = await fetchJson("/api/state");
-    if (state) { appState = state; renderCurrentView(); }
+    await refreshStateQuietly();
   } catch (err) {
     barDot.classList.remove("thinking");
     barDot.classList.add("disconnected");
@@ -3184,6 +3327,7 @@ const renderGeneratedMaterials = (items, groups = materialGroups(items)) => {
     const stats = group.stats;
     const shell = document.createElement("details");
     shell.className = "material-job";
+    shell.dataset.disclosureKey = `materials:${group.job_id || group.company || group.job_title || "unmapped"}`;
     shell.open = groups.indexOf(group) === 0;
     shell.innerHTML = `
       <summary class="material-job-head" title="Expand or collapse this job's generated materials.">
@@ -3683,9 +3827,7 @@ const streamChat = async (text) => {
   }
   const state = latestStreamState || finalResult?.state || await fetchJson("/api/state");
   if (state) {
-    appState = state;
-    if (state.jobs?.length && !currentJobId) currentJobId = state.jobs[0].id;
-    renderCurrentView();
+    applyState(state);
     buildCardsFromState(state).forEach((card) => {
       const msgCard = { role: "system", content: "", card };
       messages.push(msgCard);
@@ -3761,6 +3903,7 @@ const extractText = (data) => {
 };
 
 const renderCurrentView = () => {
+  captureDisclosureState();
   if (currentView === "dashboard") renderDashboard();
   if (currentView === "actions") renderActions();
   if (currentView === "brain") renderBrain();
@@ -3771,6 +3914,7 @@ const renderCurrentView = () => {
   if (currentView === "criteria") renderCriteria();
   if (currentView === "network") renderNetwork();
   if (currentView === "sessions") renderSessions();
+  restoreDisclosureState();
 };
 
 /* ── Init ── */
@@ -3894,47 +4038,70 @@ const init = async () => {
   if (latestUsage) renderUsage(latestUsage, { model: latestUsage.model || "" });
   else renderUsage();
 
-  try {
-    updateHermesStatus(await fetchJson("/api/hermes/status"));
-  } catch (err) {
-    setRuntimeStatus("offline");
-  }
-
-  try {
-    const catalog = await fetchJson("/api/hermes/commands");
-    const normalized = normalizeCommandCatalog(catalog || {});
-    commandCatalog = normalized.commands;
-    commandGroups = normalized.groups;
-    if (agentCommands) {
-      agentCommands.textContent = commandCatalog.length ? `${commandCatalog.length}` : "off";
-    }
-  } catch (err) {
-    commandCatalog = [];
-    if (agentCommands) agentCommands.textContent = "off";
-  }
-
-  try {
-    await refreshSessions();
-  } catch (err) {
-    hermesSessions = [];
-    renderSessions();
-  }
-
-  try {
-    discoveryStatus = await fetchJson("/api/discovery/status");
-  } catch (err) {
-    discoveryStatus = null;
-  }
-
-  try {
-    const state = await fetchJson("/api/state");
-    appState = state;
-    if (state?.jobs?.length && !currentJobId) currentJobId = state.jobs[0].id;
-    renderCurrentView();
+  let scrolledInitialState = false;
+  const markInitialStateRendered = () => {
+    if (scrolledInitialState) return;
     scrollCurrentViewToTop();
-  } catch (err) {
-    setRuntimeStatus("offline");
-  }
+    scrolledInitialState = true;
+  };
+
+  const cachedStatePromise = readCachedState()
+    .then((state) => {
+      if (state && !appState) {
+        applyState(state, { persist: false });
+        markInitialStateRendered();
+      }
+    })
+    .catch(() => null);
+
+  const liveStatePromise = loadFullState({ render: false, persist: true })
+    .then(() => {
+      renderCurrentView();
+      markInitialStateRendered();
+    })
+    .catch(() => setRuntimeStatus("offline"));
+
+  const statusPromise = fetchJson("/api/hermes/status")
+    .then(updateHermesStatus)
+    .catch(() => setRuntimeStatus("offline"));
+
+  const catalogPromise = fetchJson("/api/hermes/commands")
+    .then((catalog) => {
+      const normalized = normalizeCommandCatalog(catalog || {});
+      commandCatalog = normalized.commands;
+      commandGroups = normalized.groups;
+      if (agentCommands) {
+        agentCommands.textContent = commandCatalog.length ? `${commandCatalog.length}` : "off";
+      }
+    })
+    .catch(() => {
+      commandCatalog = [];
+      if (agentCommands) agentCommands.textContent = "off";
+    });
+
+  const sessionsPromise = refreshSessions()
+    .catch(() => {
+      hermesSessions = [];
+      renderSessions();
+    });
+
+  const discoveryPromise = fetchJson("/api/discovery/status")
+    .then((status) => {
+      discoveryStatus = status;
+    })
+    .catch(() => {
+      discoveryStatus = null;
+    });
+
+  await cachedStatePromise;
+  startStateEvents();
+  await Promise.allSettled([
+    liveStatePromise,
+    statusPromise,
+    catalogPromise,
+    sessionsPromise,
+    discoveryPromise,
+  ]);
 };
 
 init();

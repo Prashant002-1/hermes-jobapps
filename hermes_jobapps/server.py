@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import gzip
 import json
 import mimetypes
 import re
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -92,6 +95,60 @@ class AppState:
             session_key=self.hermes_session_key,
         )
         self.command_catalog_cache: dict[str, Any] | None = None
+        self._state_condition = threading.Condition()
+        self.state_version = 0
+        self.state_changed_at = self._state_timestamp()
+        self._state_cache_version = -1
+        self._state_cache_payload: dict[str, Any] | None = None
+        self.repo.on_change = self.mark_state_changed
+
+    @staticmethod
+    def _state_timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _state_meta_locked(self) -> dict[str, Any]:
+        return {
+            "state_version": self.state_version,
+            "state_changed_at": self.state_changed_at,
+        }
+
+    def mark_state_changed(self) -> None:
+        with self._state_condition:
+            self.state_version += 1
+            self.state_changed_at = self._state_timestamp()
+            self._state_cache_version = -1
+            self._state_cache_payload = None
+            self._state_condition.notify_all()
+
+    def state_meta(self) -> dict[str, Any]:
+        with self._state_condition:
+            return self._state_meta_locked()
+
+    def wait_for_state_change(self, last_version: int, *, timeout: float = 25.0) -> dict[str, Any]:
+        with self._state_condition:
+            if self.state_version <= last_version:
+                self._state_condition.wait(timeout=timeout)
+            return self._state_meta_locked()
+
+    def full_state(self) -> dict[str, Any]:
+        with self._state_condition:
+            if self._state_cache_version == self.state_version and self._state_cache_payload is not None:
+                return self._state_cache_payload
+            version = self.state_version
+            changed_at = self.state_changed_at
+
+        payload = self.repo.dashboard() | {
+            "tool_specs": self.toolbox.specs(),
+            "criteria": self.config.get("criteria", {}),
+            "state_version": version,
+            "state_changed_at": changed_at,
+        }
+
+        with self._state_condition:
+            if self.state_version == version:
+                self._state_cache_version = version
+                self._state_cache_payload = payload
+        return payload
 
 
 def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
@@ -126,10 +183,38 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 if head:
                     self._empty_json()
                     return
-                dashboard = state.repo.dashboard()
-                specs = state.toolbox.specs()
-                criteria = state.config.get("criteria", {})
-                self._json(dashboard | {"tool_specs": specs, "criteria": criteria})
+                self._json(state.full_state())
+                return
+            if request_path == "/api/state/version":
+                if head:
+                    self._empty_json()
+                    return
+                self._json(state.state_meta())
+                return
+            if request_path == "/api/state/events":
+                if head:
+                    self._empty_json()
+                    return
+                query = parse_qs(parsed.query)
+                try:
+                    last_version = int((query.get("after") or ["-1"])[0])
+                except ValueError:
+                    last_version = -1
+                self._start_sse()
+                try:
+                    meta = state.state_meta()
+                    self._sse("state", meta)
+                    last_version = int(meta.get("state_version", last_version))
+                    while True:
+                        meta = state.wait_for_state_change(last_version)
+                        current_version = int(meta.get("state_version", last_version))
+                        if current_version == last_version:
+                            self._sse("heartbeat", meta)
+                        else:
+                            self._sse("state", meta)
+                            last_version = current_version
+                except (BrokenPipeError, ConnectionResetError):
+                    return
                 return
             if request_path == "/api/hermes/status":
                 if head:
@@ -369,12 +454,9 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 if isinstance(raw_job_ids, list):
                     job_ids = [str(item) for item in raw_job_ids if re.fullmatch(r"[a-f0-9]{12}", str(item))]
                 else:
-                    job_ids = _pending_hermes_job_ids(state.repo.dashboard().get("jobs", []))
+                    job_ids = _pending_hermes_job_ids(state.full_state().get("jobs", []))
                 result = state.runs.start_for_jobs(job_ids)
-                dashboard = state.repo.dashboard()
-                specs = state.toolbox.specs()
-                criteria = state.config.get("criteria", {})
-                self._json(result | {"state": dashboard | {"tool_specs": specs, "criteria": criteria}}, HTTPStatus.ACCEPTED)
+                self._json(result | {"state": state.full_state()}, HTTPStatus.ACCEPTED)
                 return
 
             match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})/hermes-run", self.path)
@@ -413,7 +495,7 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                             "source": "cockpit",
                         },
                     )
-                    self._json({"job": record, "state": state.repo.dashboard()})
+                    self._json({"job": record, "state": state.full_state()})
                 except KeyError:
                     self._json({"error": "Job not found"}, HTTPStatus.NOT_FOUND)
                 return
@@ -440,7 +522,7 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                         notes=str(payload.get("note") or "") if "note" in payload else None,
                         due_date=str(payload.get("due_date") or "") if "due_date" in payload else None,
                     )
-                    self._json({"progress_item": item, "state": state.repo.dashboard()})
+                    self._json({"progress_item": item, "state": state.full_state()})
                 except KeyError:
                     self._json({"error": "Progress item not found"}, HTTPStatus.NOT_FOUND)
                 return
@@ -459,7 +541,7 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                         due_date=str(payload.get("due_date") or "") if "due_date" in payload else None,
                         reason=str(payload.get("reason") or "") if "reason" in payload else None,
                     )
-                    self._json({"followup": followup, "state": state.repo.dashboard()})
+                    self._json({"followup": followup, "state": state.full_state()})
                 except KeyError:
                     self._json({"error": "Follow-up not found"}, HTTPStatus.NOT_FOUND)
                 return
@@ -484,7 +566,7 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                             "approval_updated",
                             {"approval_id": match.group(1), "status": status, "note": payload.get("note", "")},
                         )
-                    self._json({"approval": approval, "state": state.repo.dashboard()})
+                    self._json({"approval": approval, "state": state.full_state()})
                 except KeyError:
                     self._json({"error": "Approval not found"}, HTTPStatus.NOT_FOUND)
                 return
@@ -508,7 +590,7 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                         "approval_updated",
                         {"approval_id": match.group(2), "status": status, "note": payload.get("note", "")},
                     )
-                    self._json({"approval": approval, "state": state.repo.dashboard()})
+                    self._json({"approval": approval, "state": state.full_state()})
                 except KeyError:
                     self._json({"error": "Approval not found"}, HTTPStatus.NOT_FOUND)
                 return
@@ -530,7 +612,9 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 try:
                     save_config_overlay({"criteria": payload})
                     state.config = load_config()
+                    state.toolbox.config = state.config
                     state.discovery = DiscoveryService(state.repo, state.config)
+                    state.mark_state_changed()
                     self._json({"criteria": state.config.get("criteria", {}), "saved": True})
                 except Exception as exc:
                     self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -618,9 +702,15 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
             return state.command_catalog_cache
 
         def _json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
-            data = json.dumps(payload, indent=2).encode("utf-8")
+            data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            gzip_response = "gzip" in self.headers.get("Accept-Encoding", "").lower() and len(data) > 1024
+            if gzip_response:
+                data = gzip.compress(data, compresslevel=6)
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            if gzip_response:
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Vary", "Accept-Encoding")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
