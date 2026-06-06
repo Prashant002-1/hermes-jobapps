@@ -35,6 +35,8 @@ Use JobApps database facts, proof points, learning patterns, and app-owned mater
 
 If writing in Prashant's voice outside this project, also load the `prashant-voice` skill.
 
+Use native Hermes file/search/patch/terminal tools to author, edit, compile, and QA candidate-facing artifacts. Use JobApps tools to retrieve eligible evidence before writing and to link finished materials/provenance after the artifact is good. Do not use JobApps authoring, patch, diff, or compile helpers for ordinary material work.
+
 ## Resume Tailoring Rules
 
 - One page enforced.
@@ -47,11 +49,11 @@ If writing in Prashant's voice outside this project, also load the `prashant-voi
 - Use numbers only when they are load-bearing.
 - Project header tags should be few and high-signal.
 - Drop padding tools and broad skill inventories.
-- Save final resume builds as standard `kind="resume"` Typst (`.typ`) or PDF materials using the JobApps workflow. Use `kind="resume_tailoring"` only for notes/change plans; do not invent final-resume kinds.
-- Save materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not hand-invent submission filenames.
+- Save final resume builds as standard `kind="resume"` Typst (`.typ`) or PDF materials using `jobapps_save_material` after the candidate-facing artifact exists. Use `kind="resume_tailoring"` only for notes/change plans; do not invent final-resume kinds.
+- Link materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not turn JobApps into the drafting workbench.
 - Rotate sections by role. Data Engineer and Software Engineer are the primary defaults. Backend, SWE, data/ML-adjacent, research assistant, IT/help desk, internship, and contract versions are acceptable when they help Prashant survive and move forward.
-- Prefer current proof signals: Center for Food Action data engineering/validation/PostgreSQL work, Trimble C#/.NET/API/auth/SQL work, Novartis React/TypeScript/Azure/dashboard/data-model work, Personal Canvas Agent, ARAG/Trellis-RAG, and relevant Ramapo data analysis. Confirm details before making them stronger than the source supports.
-- For the post-grad base resume, remove stale "Expected" graduation wording. Use "May 2026" for the completed Ramapo degree unless Prashant gives different official wording. Use GPA 3.8/4.0, rounded from Prashant's current post-grad GPA of 3.75, unless he explicitly asks for the exact GPA. Do not reuse older 3.84/4.00 values from stale resumes, CVs, or `knowledge_base.html`.
+- Prefer current, user-confirmed proof signals from JobApps database records. Confirm details before making them stronger than the source supports.
+- For a base resume update, remove stale "Expected" degree wording and use user-confirmed graduation and GPA wording. Do not reuse stale values from old resumes, CVs, or `knowledge_base.html`.
 - Treat new impact claims from the CV/knowledge base, such as funding, media, number of pantries, user counts, or exact performance effects, as candidate proof until confirmed or supported by a reliable source.
 
 ## Cover Letter Rules

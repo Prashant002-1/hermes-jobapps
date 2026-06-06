@@ -142,11 +142,17 @@ JobApps supports launching material-preparation work for multiple job descriptio
 This gives Prashant the practical workflow he needs: paste or promote several JDs, open each job in JobApps, start material prep, and let the app prepare resumes/cover letters/outreach in parallel while he submits applications from the official links.
 
 Native Hermes TUI sessions use the same contract through the project plugin:
-`jobapps_prepare_opportunity` creates structured JobApps jobs from pasted JDs,
-and `jobapps_start_material_prep` can queue one job, selected job IDs, or all
-pending apply-intent jobs. These tools write to the same SQLite database as the
-cockpit, so multiple native `jobapps` profile TUI sessions stay isolated by job
-ID while sharing the same material and progress state.
+`jobapps_prepare_opportunity` creates structured JobApps jobs, blocker
+preflight, signals, tailoring targets, and prompt handoff from pasted JDs. It
+does not author candidate-facing materials. Native Hermes file/patch/terminal
+tools own writing, compilation, and QA; `jobapps_save_material` and provenance
+tools link the finished artifacts back to the app. `jobapps_start_material_prep`
+can queue one job, selected job IDs, or all pending apply-intent jobs when
+Prashant wants background Hermes material-prep runs.
+
+These tools write to the same SQLite database as the cockpit, so multiple native
+`jobapps` profile TUI sessions stay isolated by job ID while sharing the same
+material and progress state.
 
 ## Professional Material Filenames
 
@@ -172,7 +178,11 @@ Rules:
 
 ## Boundary
 
-Use JobApps tools for structured app state changes. Use Hermes memory for durable preferences and lessons. Do not store application history only in Hermes memory, and do not store every session memory item in the JobApps database.
+Use native Hermes tools as the workbench for writing, file creation, reading, patching, diffing, local Typst/TeX compilation, QA, and normal artifact edits. Use JobApps tools for targeted retrieval and structured app-state changes: job records, eligible evidence, research notes, material links/provenance, contacts, follow-ups, and application status.
+
+Default JobApps tool exposure should stay lean. Broad context/audit tools and app-owned authoring helpers are retained for dashboard/debug/internal workflows, but should not be advertised to normal material-generation runs unless Prashant asks for audit/admin behavior or JobApps-specific state semantics are required.
+
+Use Hermes memory for durable preferences and lessons. Do not store application history only in Hermes memory, and do not store every session memory item in the JobApps database.
 
 ## Startup Map
 

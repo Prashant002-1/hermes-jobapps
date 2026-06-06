@@ -6,8 +6,8 @@ These notes convert the local product direction into implementation choices. The
 
 Hermes JobApps should be a cockpit plus domain database around Hermes:
 
-- The app database owns jobs, profile facts, proof points, evaluations, prompt builds, materials, application changes, research notes, contacts, progress, follow-ups, approvals, and Hermes correlation IDs.
-- Hermes performs transitions: research, evaluate, draft, ask, call tools, and update structured state.
+- The app database owns jobs, profile facts, proof points, evaluations, prompt builds, material links/provenance, application changes, research notes, contacts, progress, follow-ups, approvals, and Hermes correlation IDs.
+- Hermes performs transitions: research, evaluate, author candidate-facing material with native file/patch/terminal tools, ask, call targeted JobApps retrieval/ledger tools, and update structured state after the artifact exists.
 - Private seed files can import into the database, but they are not source of truth and not stable schema.
 - SQLite is enough until the workflow needs multi-user sharing or remote deployment.
 - External actions stay behind explicit approval.
@@ -77,7 +77,7 @@ Hermes should be able to call tools for:
 - reading/searching career-brain context
 - recording career-brain entities/events when personal context, corrections, decisions, networking history, or revision rationale appears
 
-Tooling must be visible, inspectable, and safe. State-changing tools write to the app database. External actions remain out of scope until explicit approval and preview workflows exist.
+Tooling must be visible, inspectable, and safe. State-changing JobApps tools write to the app database. Native Hermes tools handle general writing/editing/compilation. External actions remain out of scope until explicit approval and preview workflows exist.
 
 ## Future Adapter Boundary
 
@@ -86,7 +86,8 @@ If JobApps becomes a separate service, expose the same tool contract over MCP:
 ```json
 {
   "tools": [
-    "jobapps_read_context",
+    "jobapps_brain_context",
+    "jobapps_retrieve_for_job",
     "jobapps_upsert_profile_fact",
     "jobapps_upsert_proof_point",
     "jobapps_save_material",

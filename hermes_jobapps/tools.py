@@ -379,7 +379,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_prepare_opportunity",
-        "description": "Parse a pasted opportunity or structured job payload, evaluate it, persist it, generate reviewable materials, progress, follow-up, and approval state.",
+        "description": "Parse/persist an opportunity and record blocker preflight, signals, tailoring targets, and prompt handoff. Does not author materials.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -411,7 +411,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_draft_materials",
-        "description": "Draft resume notes, cover letter text, short answers, and outreach from an evaluation.",
+        "description": "Specialist/legacy deterministic draft helper. Prefer native Hermes writing tools for candidate-facing materials.",
         "input_schema": {
             "type": "object",
             "required": ["job", "evaluation"],
@@ -431,7 +431,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_save_material",
-        "description": "Persist a generated material artifact for a job. Standard resume aliases are normalized for dashboard visibility.",
+        "description": "Record/link an already-created material artifact in JobApps state. Use Hermes-native file tools for writing/editing content first.",
         "input_schema": {
             "type": "object",
             "required": ["job_id", "kind", "content"],
@@ -450,7 +450,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_create_resume_typst",
-        "description": "Create a full app-owned Typst resume artifact from explicit, user-confirmed sections.",
+        "description": "Specialist/legacy authoring helper. Prefer Hermes-native file tools for resume creation, then jobapps_save_material for state linkage.",
         "input_schema": {
             "type": "object",
             "required": ["job_id"],
@@ -466,7 +466,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_create_resume_tex",
-        "description": "Legacy alias for resume creation. Creates a Typst resume artifact unless explicitly handled by older code.",
+        "description": "Legacy alias for resume creation. Prefer Hermes-native file tools for resume creation, then jobapps_save_material for state linkage.",
         "input_schema": {
             "type": "object",
             "required": ["job_id"],
@@ -482,7 +482,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_create_cover_letter_tex",
-        "description": "Create a full app-owned cover_letter.tex artifact from explicit cover-letter body text.",
+        "description": "Specialist/legacy authoring helper. Prefer Hermes-native file tools for cover-letter creation, then jobapps_save_material for state linkage.",
         "input_schema": {
             "type": "object",
             "required": ["job_id", "body"],
@@ -499,7 +499,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_patch_material",
-        "description": "Patch an existing material by exact text replacement, update its file, record a revision diff, and record provenance.",
+        "description": "Specialist provenance patch helper. Prefer Hermes-native patch/file tools for edits, then record important changes in JobApps state.",
         "input_schema": {
             "type": "object",
             "required": ["material_id", "old_string", "new_string", "reason"],
@@ -517,7 +517,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_diff_material",
-        "description": "Preview a unified diff for a material without saving changes.",
+        "description": "Specialist material diff helper. Prefer Hermes-native diff/patch inspection unless JobApps material metadata is required.",
         "input_schema": {
             "type": "object",
             "required": ["material_id"],
@@ -533,7 +533,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_compile_material_pdf",
-        "description": "Compile a Typst or TeX material to PDF when a compiler exists. Reports missing compiler without installing anything.",
+        "description": "Specialist compile helper for app-owned material records. Prefer Hermes-native terminal compilation when editing local files directly.",
         "input_schema": {
             "type": "object",
             "required": ["material_id"],
@@ -675,7 +675,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_request_approval",
-        "description": "Create a pending human approval gate for material review or an external action.",
+        "description": "Create a pending human approval gate for an external action. Do not use approvals for ordinary material review.",
         "input_schema": {
             "type": "object",
             "required": ["action"],
@@ -703,6 +703,107 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "writes": True,
     },
 ]
+
+
+DEFAULT_TOOL_NAMES = frozenset(
+    {
+        # Compact retrieval: use these instead of broad dashboard/context dumps.
+        "jobapps_brain_context",
+        "jobapps_search_brain",
+        "jobapps_upsert_brain_entity",
+        "jobapps_upsert_profile_fact",
+        "jobapps_upsert_proof_point",
+        "jobapps_search_evidence",
+        "jobapps_retrieve_for_job",
+        "jobapps_update_proof_lifecycle",
+        "jobapps_evaluate_job",
+        # Opportunity intake, discovery, and run orchestration.
+        "jobapps_discover_jobs",
+        "jobapps_hydrate_job_url",
+        "jobapps_prepare_discovered_job",
+        "jobapps_prepare_opportunity",
+        "jobapps_start_material_prep",
+        # App-state ledger writes. Hermes-native tools should create/edit files first.
+        "jobapps_record_job",
+        "jobapps_save_material",
+        "jobapps_mark_material_ready_for_review",
+        "jobapps_record_research_note",
+        "jobapps_record_application_signal",
+        "jobapps_record_tailoring_requirement",
+        "jobapps_record_portrayal_decision",
+        "jobapps_record_application_change",
+        "jobapps_record_learning_pattern",
+        "jobapps_record_brain_event",
+        "jobapps_update_status",
+        # Networking state and draft-only communication support.
+        "jobapps_find_people",
+        "jobapps_create_gmail_draft",
+        "jobapps_create_progress_item",
+        "jobapps_create_followup",
+        "jobapps_request_approval",
+        "jobapps_update_approval",
+    }
+)
+
+SPECIALIST_TOOL_NAMES = frozenset(
+    {
+        # App-owned authoring helpers retained for dashboard/internal automation.
+        # Native Hermes file/patch/terminal tools should handle normal writing,
+        # editing, diffing, and compilation work in Hermes sessions.
+        "jobapps_draft_materials",
+        "jobapps_create_resume_typst",
+        "jobapps_create_resume_tex",
+        "jobapps_create_cover_letter_tex",
+        "jobapps_patch_material",
+        "jobapps_diff_material",
+        "jobapps_compile_material_pdf",
+    }
+)
+
+DEBUG_TOOL_NAMES = frozenset(
+    {
+        "jobapps_read_context",
+        "jobapps_database_health",
+        "jobapps_tool_call_retention",
+        "jobapps_discovery_status",
+        "jobapps_networking_status",
+        "jobapps_save_prompt",
+    }
+)
+
+
+def _tool_exposure(name: str) -> str:
+    if name in DEFAULT_TOOL_NAMES:
+        return "default"
+    if name in DEBUG_TOOL_NAMES:
+        return "debug"
+    return "specialist"
+
+
+def _with_tool_routing_metadata(spec: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(spec)
+    exposure = _tool_exposure(str(enriched.get("name") or ""))
+    enriched["exposure"] = exposure
+    if exposure == "default":
+        enriched["tool_boundary"] = "JobApps retrieval/state ledger; use Hermes-native tools for general writing, file edits, patching, and compilation."
+    elif exposure == "debug":
+        enriched["tool_boundary"] = "Debug/audit only; do not expose in normal material-generation context."
+    else:
+        enriched["tool_boundary"] = "Specialist/internal helper; use only when app-owned state semantics are required and Hermes-native tools are not enough."
+    return enriched
+
+
+ALL_TOOL_SPECS: tuple[dict[str, Any], ...] = tuple(_with_tool_routing_metadata(spec) for spec in TOOL_SPECS)
+TOOL_SPECS = [spec for spec in ALL_TOOL_SPECS if spec["exposure"] == "default"]
+
+
+def specs_for_exposure(exposure: str = "default") -> list[dict[str, Any]]:
+    normalized = (exposure or "default").lower()
+    if normalized in {"all", "full"}:
+        return [dict(spec) for spec in ALL_TOOL_SPECS]
+    if normalized in {"default", "normal", "visible"}:
+        return [dict(spec) for spec in TOOL_SPECS]
+    return [dict(spec) for spec in ALL_TOOL_SPECS if spec["exposure"] == normalized]
 
 
 class AgentToolbox:
@@ -763,8 +864,16 @@ class AgentToolbox:
             "jobapps_update_approval": self._update_approval,
         }
 
-    def specs(self) -> list[dict[str, Any]]:
-        return TOOL_SPECS
+    def specs(self, exposure: str = "default") -> list[dict[str, Any]]:
+        """Return JobApps tool schemas for a given exposure tier.
+
+        Default exposure is intentionally state/retrieval oriented. Authoring,
+        patching, diffing, compilation, broad context dumps, and audit helpers
+        remain executable by name for the dashboard/internal workflows, but are
+        not advertised to normal Hermes runs where native Hermes tools are the
+        right workbench.
+        """
+        return specs_for_exposure(exposure)
 
     def execute(self, name: str, payload: dict[str, Any], run_id: str | None = None) -> dict[str, Any]:
         if name not in self._handlers:

@@ -177,11 +177,11 @@ The database is the app's source of truth. Private files can seed the database, 
 
 Hermes is the engine.
 
-It reasons through the opportunity, applies Prashant's context, uses tools when useful, drafts material, updates records, and asks for approval when the next step matters.
+It reasons through the opportunity, applies Prashant's context, uses tools when useful, creates and edits the candidate-facing material with native Hermes workbench tools, then updates JobApps records only where the trail matters.
 
 Hermes should not become a generic job bot. It should act like a career operator that knows Prashant and protects his time.
 
-Hermes should stay native to its own architecture: profiles, API server, session storage, memory, skills, provider runtime, and tool dispatch. JobApps adds a cockpit and database/tool layer around Hermes; it should not replace Hermes memory/session management.
+Hermes should stay native to its own architecture: profiles, API server, session storage, memory, skills, provider runtime, file/search/patch/terminal tooling, and tool dispatch. JobApps adds a cockpit and database/tool layer around Hermes; it should not replace Hermes memory/session management or duplicate general authoring/editing/compilation capabilities.
 
 ## Correct Architecture Stance
 
@@ -189,7 +189,8 @@ JobApps should be agent-centric without turning the app into an agent framework.
 
 - Hermes chat should be available inside the app.
 - Native Hermes TUI/API sessions should be able to see JobApps context through the project plugin or a future MCP bridge.
-- JobApps tools should let Hermes read and update database state.
+- JobApps tools should let Hermes read targeted career/job context and update database state after the user-visible work exists.
+- Native Hermes tools should handle normal writing, file creation, patching, diffing, local compilation, and QA. JobApps material tools are specialist/internal helpers, not the default workbench.
 - Resume builds should be Typst files; cover-letter builds remain TeX unless migrated separately.
 - Prompt builds should be saved so decisions are reproducible.
 - Research, networking notes, material changes, progress, and follow-ups should be structured records.

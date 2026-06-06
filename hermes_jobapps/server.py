@@ -9,6 +9,7 @@ import json
 import mimetypes
 import re
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -100,6 +101,7 @@ class AppState:
         self.state_changed_at = self._state_timestamp()
         self._state_cache_version = -1
         self._state_cache_payload: dict[str, Any] | None = None
+        self._db_state_token = self._current_db_state_token()
         self.repo.on_change = self.mark_state_changed
 
     @staticmethod
@@ -112,25 +114,50 @@ class AppState:
             "state_changed_at": self.state_changed_at,
         }
 
-    def mark_state_changed(self) -> None:
+    def _current_db_state_token(self) -> tuple[int, str]:
+        revision = self.repo.state_revision()
+        return (int(revision.get("revision") or 0), str(revision.get("updated_at") or ""))
+
+    def _mark_state_changed_locked(self, db_token: tuple[int, str]) -> None:
+        self._db_state_token = db_token
+        self.state_version += 1
+        self.state_changed_at = self._state_timestamp()
+        self._state_cache_version = -1
+        self._state_cache_payload = None
+        self._state_condition.notify_all()
+
+    def mark_state_changed(self, *, force: bool = False) -> None:
+        db_token = self._current_db_state_token()
         with self._state_condition:
-            self.state_version += 1
-            self.state_changed_at = self._state_timestamp()
-            self._state_cache_version = -1
-            self._state_cache_payload = None
-            self._state_condition.notify_all()
+            if not force and db_token == self._db_state_token:
+                return
+            self._mark_state_changed_locked(db_token)
+
+    def sync_external_state(self) -> None:
+        db_token = self._current_db_state_token()
+        with self._state_condition:
+            if db_token != self._db_state_token:
+                self._mark_state_changed_locked(db_token)
 
     def state_meta(self) -> dict[str, Any]:
+        self.sync_external_state()
         with self._state_condition:
             return self._state_meta_locked()
 
     def wait_for_state_change(self, last_version: int, *, timeout: float = 25.0) -> dict[str, Any]:
-        with self._state_condition:
-            if self.state_version <= last_version:
-                self._state_condition.wait(timeout=timeout)
-            return self._state_meta_locked()
+        deadline = time.monotonic() + timeout
+        while True:
+            self.sync_external_state()
+            with self._state_condition:
+                if self.state_version > last_version:
+                    return self._state_meta_locked()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return self._state_meta_locked()
+                self._state_condition.wait(timeout=min(1.0, remaining))
 
     def full_state(self) -> dict[str, Any]:
+        self.sync_external_state()
         with self._state_condition:
             if self._state_cache_version == self.state_version and self._state_cache_payload is not None:
                 return self._state_cache_payload
@@ -614,7 +641,7 @@ def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                     state.config = load_config()
                     state.toolbox.config = state.config
                     state.discovery = DiscoveryService(state.repo, state.config)
-                    state.mark_state_changed()
+                    state.mark_state_changed(force=True)
                     self._json({"criteria": state.config.get("criteria", {}), "saved": True})
                 except Exception as exc:
                     self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)

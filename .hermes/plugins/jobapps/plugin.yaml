@@ -4,8 +4,6 @@ description: Exposes Hermes JobApps database tools, context injection, and workf
 author: Prashant Shah
 kind: standalone
 provides_tools:
-  - jobapps_read_context
-  - jobapps_database_health
   - jobapps_brain_context
   - jobapps_search_brain
   - jobapps_upsert_brain_entity
@@ -14,11 +12,9 @@ provides_tools:
   - jobapps_upsert_proof_point
   - jobapps_search_evidence
   - jobapps_retrieve_for_job
-  - jobapps_discovery_status
   - jobapps_discover_jobs
   - jobapps_hydrate_job_url
   - jobapps_prepare_discovered_job
-  - jobapps_networking_status
   - jobapps_find_people
   - jobapps_create_gmail_draft
   - jobapps_record_application_signal
@@ -28,17 +24,9 @@ provides_tools:
   - jobapps_evaluate_job
   - jobapps_prepare_opportunity
   - jobapps_start_material_prep
-  - jobapps_draft_materials
   - jobapps_record_job
   - jobapps_save_material
-  - jobapps_create_resume_typst
-  - jobapps_create_resume_tex
-  - jobapps_create_cover_letter_tex
-  - jobapps_patch_material
-  - jobapps_diff_material
-  - jobapps_compile_material_pdf
   - jobapps_mark_material_ready_for_review
-  - jobapps_save_prompt
   - jobapps_record_research_note
   - jobapps_record_application_change
   - jobapps_record_learning_pattern

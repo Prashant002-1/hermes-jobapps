@@ -70,29 +70,32 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
         "followup",
         "outreach",
     )
-    if not is_first_turn and not any(term in query for term in trigger_terms):
+    triggered = any(term in query for term in trigger_terms)
+    boundary = (
+        "Use native Hermes file/search/patch/terminal tools for material writing, editing, diffing, "
+        "Typst/TeX compilation, and QA. Use JobApps tools only for targeted retrieval and durable "
+        "app-state ledger records such as jobs, proof points, material links/provenance, contacts, "
+        "follow-ups, status, and external-action approvals."
+    )
+    if not triggered:
+        if is_first_turn:
+            return {"context": f"JobApps SQLite context is available through targeted tools. {boundary}"}
         return None
 
     try:
         repo = _toolbox().repo
         dashboard = repo.dashboard()
-        recent_jobs = dashboard.get("jobs", [])[:5]
+        recent_jobs = dashboard.get("jobs", [])[:3]
         context_counts = dashboard.get("context_counts", {})
         discovery_counts = dashboard.get("discovery", {}).get("counts", {})
-        brain = dashboard.get("brain", {})
         lines = [
             "JobApps app context is available. Treat the JobApps SQLite database as source of truth.",
+            boundary,
             f"Profile facts: {context_counts.get('profile_facts', 0)}; active proof points: {context_counts.get('proof_points', 0)}; application signals: {context_counts.get('application_signals', 0)}.",
             f"Career-brain entities: {context_counts.get('brain_entities', 0)}; career-brain events: {context_counts.get('brain_events', 0)}.",
             f"Discovery candidates: {discovery_counts.get('total', 0)}; ready={discovery_counts.get('ready', 0)}; needs_review={discovery_counts.get('needs_review', 0)}.",
             f"Cached contacts: {context_counts.get('contacts', 0)}.",
         ]
-        recent_brain_events = brain.get("recent_events", [])[:4]
-        if recent_brain_events:
-            lines.append("Recent career-brain events:")
-            for event in recent_brain_events:
-                entity = event.get("entity") or {}
-                lines.append(f"- {event.get('event_type')}: {event.get('title')} ({entity.get('title') or 'memory'})")
         if recent_jobs:
             lines.append("Recent opportunities:")
             for job in recent_jobs:
@@ -101,7 +104,7 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
                 status = job.get("status") or "saved"
                 decision = job.get("decision") or "review"
                 lines.append(f"- {job.get('id')}: {title} at {company}; status={status}; decision={decision}")
-        lines.append("Use jobapps_* tools for durable app state changes. Use jobapps_start_material_prep to queue background material-prep runs for existing jobs when Prashant wants multiple applications prepared in parallel. Discovery candidates must be promoted before tailoring. For networking, use jobapps_find_people to cache public contacts and jobapps_create_gmail_draft only for drafts; never send email.")
+        lines.append("Use jobapps_prepare_opportunity for intake/evaluation only; it does not author candidate-facing materials. Use jobapps_start_material_prep only when Prashant wants background Hermes material-prep runs for existing jobs. Discovery candidates must be promoted before tailoring. For networking, use jobapps_find_people to cache public contacts and jobapps_create_gmail_draft only for drafts; never send email.")
         return {"context": "\n".join(lines)}
     except Exception as exc:
         return {"context": f"JobApps context bridge failed: {exc}"}

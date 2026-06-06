@@ -25,7 +25,7 @@ Hermes JobApps helps Prashant move from an opportunity to a clear next action:
 - research the company and role just enough to avoid blind tailoring
 - find the strongest truthful angle
 - turn JD needs into tailoring requirements
-- tailor resume material as `.tex`
+- tailor resume material as Typst (`.typ`)
 - draft cover letters as `.tex`
 - draft short application answers
 - draft networking search notes, outreach, and follow-ups
@@ -80,7 +80,7 @@ For each opportunity:
 7. **Match** requirements to active, user-confirmed database proof points.
 8. **Update context** when the user gives a new durable experience story or preference.
 9. **Choose angle**: the one truthful story that gives Prashant the strongest position.
-10. **Draft materials** using project skills and save resume/cover-letter builds as `.tex`.
+10. **Draft materials** using project skills and native Hermes workbench tools; save resume builds as `.typ` and cover-letter builds as `.tex`.
 11. **Record provenance**: tailoring requirement, portrayal decision, material change, and supporting proof point.
 12. **Record learning patterns** when corrections should carry into future applications.
 13. **Ask for approval** before any external side effect.

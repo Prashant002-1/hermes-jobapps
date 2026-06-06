@@ -47,6 +47,7 @@ MATERIAL_REVIEW_STATUSES = {"materials_ready_for_review"}
 ACTION_RESOLVED_STATUSES = set(ACTION_CLOSED_STATUSES) | {"approved", "rejected", "superseded"}
 TOOL_CALL_INLINE_LIMIT_BYTES = 1_000_000
 TOOL_CALL_ARCHIVE_ROOT = Path("data/tool-call-archive")
+STATE_REVISION_KEY = "state_revision"
 
 
 class JobRepository:
@@ -66,8 +67,11 @@ class JobRepository:
             conn.execute("PRAGMA busy_timeout=30000")
             before_changes = conn.total_changes
             yield conn
+            has_changes = conn.total_changes > before_changes
+            if has_changes:
+                self._touch_state_revision_conn(conn)
             conn.commit()
-            if conn.total_changes > before_changes and self.on_change is not None:
+            if has_changes and self.on_change is not None:
                 try:
                     self.on_change()
                 except Exception:
@@ -77,6 +81,34 @@ class JobRepository:
             raise
         finally:
             conn.close()
+
+    @staticmethod
+    def _touch_state_revision_conn(conn: sqlite3.Connection) -> None:
+        now = utc_now()
+        conn.execute(
+            """
+            INSERT INTO app_state_meta (key, value, updated_at)
+            VALUES (?, '1', ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = CAST(CAST(app_state_meta.value AS INTEGER) + 1 AS TEXT),
+                updated_at = excluded.updated_at
+            """,
+            (STATE_REVISION_KEY, now),
+        )
+
+    def state_revision(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value, updated_at FROM app_state_meta WHERE key = ?",
+                (STATE_REVISION_KEY,),
+            ).fetchone()
+        if row is None:
+            return {"revision": 0, "updated_at": ""}
+        try:
+            revision = int(row["value"])
+        except (TypeError, ValueError):
+            revision = 0
+        return {"revision": revision, "updated_at": row["updated_at"] or ""}
 
     def _init(self) -> None:
         with self._connect() as conn:
@@ -339,6 +371,12 @@ class JobRepository:
                     created_at TEXT NOT NULL,
                     FOREIGN KEY(material_id) REFERENCES materials(id) ON DELETE CASCADE,
                     FOREIGN KEY(job_id) REFERENCES jobs(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS app_state_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_material_revisions_material

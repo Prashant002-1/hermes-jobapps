@@ -72,9 +72,11 @@ This document lists what the backend (`server.py`, `hermes_client.py`, `runs.py`
 
 ## 3. Chat → Prepare flow (natural language ingestion)
 
-**Status:** Implemented for pasted descriptions.
+**Status:** Implemented for pasted descriptions as intake/evaluation state.
 
-When the user pastes a job description in chat, `ChatOrchestrator` parses a conservative job payload and runs `JobAppsWorkflow.prepare_opportunity()`. The `jobapps_prepare_opportunity` tool also accepts `{text}` / `{message}` / structured job fields and creates the full DB record.
+When the user pastes a job description in chat, `ChatOrchestrator` parses a conservative job payload and runs `JobAppsWorkflow.prepare_opportunity()`. The `jobapps_prepare_opportunity` tool also accepts `{text}` / `{message}` / structured job fields and creates the DB record, blocker preflight, application signals, tailoring requirements, portrayal plan, and Hermes prompt handoff.
+
+It intentionally does not author candidate-facing resume, cover-letter, short-answer, or outreach materials. Native Hermes file/patch/terminal tools own writing, compilation, and QA; JobApps links finished artifacts and provenance after the material is good.
 
 **Still later:** URL crawling/extraction. Manual pasted descriptions remain the first useful workflow.
 
@@ -102,12 +104,12 @@ The frontend can poll `GET /api/jobs/:id/hermes-run` for status after `started_h
 **Status:** Implemented.
 
 Every Hermes chat fallback and long-running Hermes run now injects:
-- Current active job (if any) — title, company, description, current blocker decision
-- Profile summary — target role, constraints (F-1/OPT), proof points count
-- Tailoring lifecycle counts — application signals, tailoring requirements, portrayal decisions, learning patterns
-- Available tools — list of `jobapps_*` tools with descriptions
+- Right-tool boundary — native Hermes tools for writing/editing/compilation/QA, JobApps tools for retrieval and ledger state
+- Compact profile and lifecycle counts — profile facts, proof points, application signals, tailoring requirements, portrayal decisions, learning patterns
+- Recent opportunities only when the turn is JobApps/job/material/networking related
+- Default JobApps tool specs only; broad context, debug/audit, prompt dump, and app-owned authoring helpers stay out of normal material-generation context
 
-This ensures Hermes has full context without the user having to repeat themselves.
+This gives Hermes enough context to act without making JobApps feel like the default authoring environment.
 
 **Files to touch:** `prompts.py` (`build_chat_instructions`), `server.py` (chat handler — pass repo data)
 
@@ -126,19 +128,19 @@ Backend endpoint:
 
 ## 7. Live application-materials workbench
 
-**Status:** Implemented for app-owned Typst resume artifacts, TeX cover-letter artifacts, revisions, diffs, compile contract, and approval gates.
+**Status:** Implemented for app-owned Typst resume artifacts, TeX cover-letter artifacts, revisions, diffs, compile contract, and material-ready metadata. These helpers remain available, but normal Hermes sessions should use native file/patch/terminal tools for authoring and compilation, then link finished artifacts back to JobApps.
 
 The cockpit now treats materials as first-class state:
 - `material_revisions` table records every agent/user patch with before/after text, unified diff, reason, requirement, and proof reference.
 - `GET /api/state` includes `materials_workbench` with primary resume/cover-letter artifacts, revision count, latest diff, compile status, PDF/log paths, and explicit external-use warning.
-- New tools expose the workbench through the existing `/api/tools/:tool` route:
-  - `jobapps_create_resume_typst` — creates full `resume.typ` artifact.
+- Specialist/internal tools remain callable through the existing `/api/tools/:tool` route:
+  - `jobapps_create_resume_typst` — creates full `resume.typ` artifact when an app-owned helper is explicitly needed.
   - `jobapps_create_resume_tex` — legacy alias that now creates the Typst resume artifact.
-  - `jobapps_create_cover_letter_tex` — creates full `cover_letter.tex` artifact.
-  - `jobapps_patch_material` — exact replacement patch, file update, revision diff, provenance record.
-  - `jobapps_diff_material` — preview diff without mutation.
+  - `jobapps_create_cover_letter_tex` — creates full `cover_letter.tex` artifact when an app-owned helper is explicitly needed.
+  - `jobapps_patch_material` — exact replacement patch, file update, revision diff, provenance record when JobApps material-revision semantics are required.
+  - `jobapps_diff_material` — preview diff without mutation when operating on a stored material record.
   - `jobapps_compile_material_pdf` — compiles Typst or TeX to PDF using configured compiler search paths and common macOS locations (`/opt/homebrew/bin`, `/usr/local/bin`, `/Library/TeX/texbin`); reports `missing_compiler` without installing anything when unavailable.
-  - `jobapps_mark_material_ready_for_review` — creates explicit human approval gate.
+  - `jobapps_mark_material_ready_for_review` — marks materials ready for human review without creating a dashboard Action.
 - Frontend renders a **Materials** card with artifact metadata, revisions, latest diff, compile status, and a `Compile PDF` action.
 
 **Compiler status:** `typst` 0.14.2 is installed at `/opt/homebrew/bin/typst`; smoke tests compile generated resume Typst artifacts to PDF through the app API. `tectonic` remains supported for TeX cover-letter and legacy artifacts. The code still returns `missing_compiler` cleanly on machines without the requested compiler.
@@ -184,8 +186,8 @@ This is the local Honcho-like layer: app-owned conclusions with metadata, filter
 | 4 | Run ID in chat response | ✅ Implemented where available |
 | 5 | System context injection | ✅ Implemented |
 | 6 | Approval endpoint | ✅ Implemented |
-| 7 | Live materials workbench | ✅ Implemented for Typst resume artifacts, TeX cover-letter/legacy artifacts, revisions, diffs, and PDF compile |
+| 7 | Live materials workbench | ✅ Implemented for Typst resume artifacts, TeX cover-letter/legacy artifacts, revisions, diffs, PDF compile, and specialist/internal helpers |
 | 8 | Evidence + signals + tailoring lifecycle | ✅ Implemented with proof lifecycle, application signals, tailoring requirements, portrayal decisions, learning patterns, retrieval chunks, and FTS search |
 | 9 | Personal career brain | ✅ Implemented in SQLite with `brain_entities`, `brain_events`, FTS search, tool exposure, chat capture, and automatic event trails |
 
-The first useful chat-driven workflow is now real: paste a job description → blocker preflight/assume-apply → signal and tailoring extraction → structured state cards → career-brain trail → TeX materials → revision diffs/provenance → PDF compile → explicit review approval gate. The next shift is stronger frontend ergonomics and deeper review UX, not rebuilding the backend lifecycle.
+The first useful chat-driven workflow is now real: paste a job description → blocker preflight/assume-apply → signal and tailoring extraction → compact evidence/state cards → candidate-facing materials created in the native Hermes workbench → provenance/status recorded in JobApps → PDF/Gmail/manual submission artifacts verified. The next shift is stronger material quality and review ergonomics, not more backend lifecycle expansion.

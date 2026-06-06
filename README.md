@@ -92,8 +92,10 @@ owns only a lightweight cockpit checkpoint.
 ## Generated Materials
 
 Generated application materials are app-owned rows in SQLite with optional local
-files under the configured `materials_path` (`data/materials` by default). The
-default file convention is:
+files under the configured `materials_path` (`data/materials` by default).
+Native Hermes tools should author, edit, compile, and QA candidate-facing files;
+JobApps links finished artifacts and provenance after the material is good.
+Legacy/internal helpers may still create files under:
 
 ```text
 data/materials/<job_id>/resume_tailoring.typ

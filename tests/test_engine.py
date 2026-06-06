@@ -24,7 +24,7 @@ from hermes_jobapps.prompts import build_chat_instructions, build_opportunity_pr
 from hermes_jobapps.repository import JobRepository
 from hermes_jobapps.runs import HermesRunManager, _extract_text
 from hermes_jobapps.server import AppState, create_handler
-from hermes_jobapps.tools import AgentToolbox, normalize_material_format
+from hermes_jobapps.tools import AgentToolbox, normalize_material_format, specs_for_exposure
 from hermes_jobapps.workflow import JobAppsWorkflow
 from hermes_jobapps.writers import draft_materials
 
@@ -332,6 +332,43 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(content_encoding, "gzip")
             self.assertIn("state_version", payload)
             self.assertEqual(payload["jobs"][0]["company"], "ExampleCo")
+
+    def test_app_state_detects_external_material_writes_without_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "state.sqlite3"
+            state = AppState(None, str(db_path))
+            record = state.repo.create_job(
+                {
+                    "title": "AI Engineer",
+                    "company": "ExampleCo",
+                    "description": "Build agent workflows.",
+                },
+                {
+                    "decision": "apply",
+                    "role_family": "ai_agent_systems",
+                    "next_action": "Prepare materials.",
+                },
+            )
+            initial = state.full_state()
+            last_version = initial["state_version"]
+
+            external_repo = JobRepository(db_path)
+            external_repo.save_material(
+                record["job"]["id"],
+                "cover_letter",
+                "Dear team,\n\nHere is the generated cover letter.",
+                format="text",
+                source="native-hermes",
+            )
+
+            meta = state.wait_for_state_change(last_version, timeout=2.0)
+            refreshed = state.full_state()
+            materials = refreshed["jobs"][0]["materials_workbench"]["items"]
+
+            self.assertGreater(meta["state_version"], last_version)
+            self.assertTrue(
+                any(item["kind"] == "cover_letter" and item["source"] == "native-hermes" for item in materials)
+            )
 
     def test_dashboard_exposes_lean_job_state_buckets_and_dates(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1186,7 +1223,7 @@ class EvidenceLayerTests(unittest.TestCase):
 
             self.assertEqual([item["source"]["id"] for item in results["results"]], [active["id"]])
 
-    def test_prepare_opportunity_does_not_draft_from_resume_disallowed_proof(self) -> None:
+    def test_prepare_opportunity_does_not_author_materials_from_resume_disallowed_proof(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             repo.upsert_profile_fact("name", "Candidate Example", category="identity", source="test")
@@ -1214,11 +1251,12 @@ class EvidenceLayerTests(unittest.TestCase):
                 }
             )
 
-            material_text = "\n".join(item["content"] for item in record["materials"])
+            tool_names = {item["tool_name"] for item in record["tool_calls"]}
             changes_text = "\n".join(str(item.get("after_text", "")) for item in record["application_changes"])
-            self.assertNotIn("Interview-only evidence", material_text)
+            self.assertEqual(record["materials"], [])
+            self.assertNotIn("jobapps_draft_materials", tool_names)
+            self.assertNotIn("jobapps_save_material", tool_names)
             self.assertNotIn("Interview-only evidence", changes_text)
-            self.assertNotIn("Interview-only agent proof", material_text)
 
     def test_retrieve_for_job_returns_current_evidence_and_exclusions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1335,7 +1373,12 @@ class ToolTests(unittest.TestCase):
 
             self.assertEqual(record["job"]["title"], "AI Engineer")
             self.assertEqual(record["job"]["company"], "ExampleCo")
-            self.assertTrue(record["materials"])
+            tool_names = {item["tool_name"] for item in record["tool_calls"]}
+            self.assertEqual(record["materials"], [])
+            self.assertTrue(record["prompts"])
+            self.assertTrue(record["tailoring_requirements"])
+            self.assertNotIn("jobapps_draft_materials", tool_names)
+            self.assertNotIn("jobapps_save_material", tool_names)
             self.assertEqual(record["approvals"], [])
 
     def test_native_tui_material_prep_tool_queues_pending_jobs_concurrently(self) -> None:
@@ -2640,7 +2683,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertTrue(job["risks"])
             self.assertIn("severity", job["risks"][0])
             self.assertIn("label", job["risks"][0])
-            self.assertIn("path", job["materials_workbench"]["items"][0])
+            self.assertEqual(job["materials_workbench"]["items"], [])
             self.assertIn("summary", job["events"][0])
             self.assertIn("resume_tex", job)
             self.assertIn("cover_letter_tex", job)
@@ -2648,7 +2691,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(job["progress"], [])
             self.assertTrue(job["risks"])
 
-    def test_prepare_opportunity_creates_typst_resume_prompt_and_management_state(self) -> None:
+    def test_prepare_opportunity_creates_prompt_and_management_state_without_local_materials(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             seed_context(repo)
@@ -2668,10 +2711,12 @@ class WorkflowTests(unittest.TestCase):
                 }
             )
 
-            formats = {item["kind"]: item["format"] for item in record["materials"]}
-            self.assertEqual(formats["resume_tailoring"], "typ")
-            self.assertEqual(formats["cover_letter"], "tex")
+            tool_names = {item["tool_name"] for item in record["tool_calls"]}
+            self.assertEqual(record["materials"], [])
             self.assertTrue(record["prompts"])
+            self.assertTrue(record["tailoring_requirements"])
+            self.assertNotIn("jobapps_draft_materials", tool_names)
+            self.assertNotIn("jobapps_save_material", tool_names)
             self.assertEqual(record["progress_items"], [])
             self.assertEqual(record["followups"], [])
             self.assertEqual(record["approvals"], [])
@@ -3028,18 +3073,80 @@ class ChatOrchestratorTests(unittest.TestCase):
             self.assertIn("Current model: gpt-test", result["output_text"])
             self.assertTrue(any(event.get("type") == "menu" for event in stream_events))
 
-    def test_chat_instructions_include_live_jobapps_context_and_tools(self) -> None:
+    def test_jobapps_default_tool_specs_hide_redundant_authoring_and_debug_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            toolbox = AgentToolbox(repo, load_config())
+
+            default_names = {spec["name"] for spec in toolbox.specs()}
+            specialist_names = {spec["name"] for spec in toolbox.specs("specialist")}
+            debug_names = {spec["name"] for spec in toolbox.specs("debug")}
+            all_names = {spec["name"] for spec in toolbox.specs("all")}
+
+            self.assertIn("jobapps_save_material", default_names)
+            self.assertIn("jobapps_search_evidence", default_names)
+            self.assertIn("jobapps_upsert_profile_fact", default_names)
+            self.assertIn("jobapps_upsert_proof_point", default_names)
+            self.assertIn("jobapps_request_approval", default_names)
+            self.assertIn("jobapps_patch_material", specialist_names)
+            self.assertIn("jobapps_create_resume_typst", specialist_names)
+            self.assertIn("jobapps_compile_material_pdf", specialist_names)
+            self.assertIn("jobapps_read_context", debug_names)
+            self.assertIn("jobapps_database_health", debug_names)
+
+            self.assertNotIn("jobapps_patch_material", default_names)
+            self.assertNotIn("jobapps_create_resume_typst", default_names)
+            self.assertNotIn("jobapps_compile_material_pdf", default_names)
+            self.assertNotIn("jobapps_read_context", default_names)
+            self.assertIn("jobapps_patch_material", all_names)
+            self.assertIn("jobapps_read_context", all_names)
+
+    def test_native_plugin_manifest_and_skill_follow_default_tool_boundary(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        plugin_yaml = (root / ".hermes/plugins/jobapps/plugin.yaml").read_text(encoding="utf-8")
+        cockpit_skill = (root / ".hermes/plugins/jobapps/skills/jobapps-cockpit/SKILL.md").read_text(encoding="utf-8")
+        plugin_bridge = (root / ".hermes/plugins/jobapps/__init__.py").read_text(encoding="utf-8")
+        manifest_tools = [line.strip()[2:] for line in plugin_yaml.splitlines() if line.startswith("  - jobapps_")]
+        default_tools = [spec["name"] for spec in specs_for_exposure("default")]
+
+        for hidden in (
+            "jobapps_read_context",
+            "jobapps_database_health",
+            "jobapps_draft_materials",
+            "jobapps_create_resume_typst",
+            "jobapps_patch_material",
+            "jobapps_compile_material_pdf",
+        ):
+            self.assertNotIn(f"  - {hidden}", plugin_yaml)
+
+        self.assertIn("  - jobapps_save_material", plugin_yaml)
+        self.assertIn("  - jobapps_upsert_proof_point", plugin_yaml)
+        self.assertIn("  - jobapps_request_approval", plugin_yaml)
+        self.assertEqual(manifest_tools, default_tools)
+        self.assertIn("native Hermes file/search/patch/terminal tools", cockpit_skill)
+        self.assertIn("it does not author candidate-facing materials", cockpit_skill)
+        self.assertIn("Resume builds are `.typ` by default", cockpit_skill)
+        self.assertNotIn("Create approval records for material review", cockpit_skill)
+        self.assertNotIn("Call `jobapps_read_context`", cockpit_skill)
+        self.assertIn("Use native Hermes file/search/patch/terminal tools", plugin_bridge)
+        self.assertNotIn("Use jobapps_* tools for durable app state changes", plugin_bridge)
+
+    def test_chat_instructions_include_live_jobapps_context_and_right_tool_boundary(self) -> None:
         instructions = build_chat_instructions(
             {
                 "jobs": [{"id": "abc123def456", "title": "AI Engineer", "company": "ExampleCo", "status": "saved", "decision": "apply", "score": 4.2}],
                 "context_counts": {"profile_facts": 2, "proof_points": 5},
             },
-            [{"name": "jobapps_read_context", "description": "Read app context."}],
+            [{"name": "jobapps_save_material", "description": "Record/link an already-created material artifact."}],
         )
 
         self.assertIn("AI Engineer", instructions)
         self.assertIn("ExampleCo", instructions)
-        self.assertIn("jobapps_read_context", instructions)
+        self.assertIn("Right-tool boundary", instructions)
+        self.assertIn("native Hermes tools", instructions)
+        self.assertIn("Default JobApps retrieval/ledger tools", instructions)
+        self.assertIn("jobapps_save_material", instructions)
+        self.assertIn("Do not use broad jobapps_read_context", instructions)
 
 
 class HermesRunManagerTests(unittest.TestCase):
