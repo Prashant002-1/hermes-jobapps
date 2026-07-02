@@ -2,9 +2,9 @@
 
 ## Goal
 
-Hermes JobApps is a career context system for Prashant.
+Hermes JobApps is a career context system for an applicant.
 
-Its job is not to automate every part of the job search from day one. Its job is to understand Prashant well enough to help him choose the right angle, customize the right material, say the right thing, and keep moving.
+Its job is not to automate every part of the job search from day one. Its job is to understand the applicant well enough to help them choose the right angle, customize the right material, say the right thing, and keep moving.
 
 The system should make the job search feel less like starting from zero every time.
 
@@ -14,13 +14,13 @@ Most job tools treat the applicant like a form-filling machine. That is not the 
 
 The hard part is knowing what matters for each opportunity. What story fits the JD. Which project should be emphasized. Which parts of the resume should change. Whether there is a hard blocker. Who should be contacted. What should be said without sounding fake.
 
-Hermes is the brain of the system. It should stay current with Prashant: his voice, constraints, projects, research, patterns, application history, networking history, and career direction.
+Hermes is the brain of the system. It should stay current with the applicant's voice, constraints, projects, research, patterns, application history, networking history, and career direction.
 
 The dashboard, database, browser automation, and job sources can evolve. They are surfaces and utilities. The core is the career memory and decision layer.
 
 ## The Product We Are Building Toward
 
-Hermes JobApps should help Prashant move from a job opportunity to a clear next action.
+Hermes JobApps should help an applicant move from a job opportunity to a clear next action.
 
 For any role, it should be able to answer:
 
@@ -33,7 +33,7 @@ For any role, it should be able to answer:
 - What should the cover note or application answer say?
 - Which portrayal decisions were made, and why?
 - Which corrections/preferences should carry into future applications?
-- Who should Prashant contact?
+- Who should the applicant contact?
 - What should the networking message say?
 - What should happen next, and when?
 
@@ -43,9 +43,9 @@ The goal is not volume for its own sake. The goal is high-quality movement: bett
 
 The main workflow is not autonomous job search. The useful workflow is:
 
-> Prashant sends a job description. JobApps assumes apply intent unless hard blockers appear, extracts signals, turns JD requirements into tailoring targets, retrieves only eligible evidence, drafts truthful materials, records portrayal decisions, compiles reviewable artifacts, and learns from corrections.
+> The applicant sends a job description. JobApps assumes apply intent unless hard blockers appear, extracts signals, turns JD requirements into tailoring targets, retrieves only eligible evidence, drafts truthful materials, records portrayal decisions, compiles reviewable artifacts, and learns from corrections.
 
-The job search and application remain in the user's hands. The system accelerates the repeated application work; it does not optimize everything, impersonate Prashant, or decide his career for him.
+The job search and application remain in the user's hands. The system accelerates the repeated application work; it does not optimize everything, impersonate the applicant, or decide their career for them.
 
 This means the cockpit should optimize for speed after paste:
 
@@ -79,7 +79,7 @@ Submission automation can come later. Discovery can get smarter over time. The f
 
 A useful first workflow is simple:
 
-Prashant gives a job link or description. Hermes reads it, checks blockers, assumes application intent when safe, chooses the right angle, records tailoring requirements, suggests resume changes, drafts the application material, drafts networking outreach, and records what happened.
+The applicant gives a job link or description. Hermes reads it, checks blockers, assumes application intent when safe, chooses the right angle, records tailoring requirements, suggests resume changes, drafts the application material, drafts networking outreach, and records what happened.
 
 That is enough to make the system real.
 
@@ -87,9 +87,9 @@ That is enough to make the system real.
 
 Hermes should remember durable context, not every tiny detail.
 
-It should know Prashant's target direction: AI Engineer focused on agentic systems, RAG, tool-use, evaluation, and applied LLM workflows.
+It should know the applicant's target direction, role families, constraints, writing voice, proof themes, and behavioral patterns.
 
-It should know his constraints: F-1, OPT/H1B uncertainty, sponsorship sensitivity, and the need to avoid roles that are not realistic.
+It should know hard constraints such as work authorization, location, seniority, application effort, and roles that are not realistic.
 
 It should know his voice: direct, specific, thoughtful, not corporate, not performative, no generic enthusiasm.
 
@@ -163,7 +163,7 @@ The first executable plan for this shift:
 
 The app is the cockpit.
 
-It should show opportunities, materials, contacts, follow-ups, and progress. It should make the next action obvious. It should let Prashant approve, reject, edit, and move on.
+It should show opportunities, materials, contacts, follow-ups, and progress. It should make the next action obvious. It should let the applicant approve, reject, edit, and move on.
 
 The app should not force the architecture too early. It should stay flexible enough for the workflow to evolve as it is built.
 
@@ -177,9 +177,9 @@ The database is the app's source of truth. Private files can seed the database, 
 
 Hermes is the engine.
 
-It reasons through the opportunity, applies Prashant's context, uses tools when useful, creates and edits the candidate-facing material with native Hermes workbench tools, then updates JobApps records only where the trail matters.
+It reasons through the opportunity, applies applicant context, uses tools when useful, creates and edits the candidate-facing material with native Hermes workbench tools, then updates JobApps records only where the trail matters.
 
-Hermes should not become a generic job bot. It should act like a career operator that knows Prashant and protects his time.
+Hermes should not become a generic job bot. It should act like a career operator that knows the applicant and protects their time.
 
 Hermes should stay native to its own architecture: profiles, API server, session storage, memory, skills, provider runtime, file/search/patch/terminal tooling, and tool dispatch. JobApps adds a cockpit and database/tool layer around Hermes; it should not replace Hermes memory/session management or duplicate general authoring/editing/compilation capabilities.
 
@@ -220,4 +220,4 @@ This app should evolve through use. The first design should create direction, no
 
 The goal is not to build the perfect job automation platform.
 
-The goal is to build a system that helps Prashant apply with memory, judgment, and momentum.
+The goal is to build a system that helps an applicant apply with memory, judgment, and momentum.

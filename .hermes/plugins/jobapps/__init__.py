@@ -104,7 +104,7 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
                 status = job.get("status") or "saved"
                 decision = job.get("decision") or "review"
                 lines.append(f"- {job.get('id')}: {title} at {company}; status={status}; decision={decision}")
-        lines.append("Use jobapps_prepare_opportunity for intake/evaluation only; it does not author candidate-facing materials. Use jobapps_start_material_prep only when Prashant wants background Hermes material-prep runs for existing jobs. Discovery candidates must be promoted before tailoring. For networking, use jobapps_find_people to cache public contacts and jobapps_create_gmail_draft only for drafts; never send email.")
+        lines.append("Use jobapps_prepare_opportunity for intake/evaluation only; it does not author candidate-facing materials. Use jobapps_start_material_prep only when the applicant wants background Hermes material-prep runs for existing jobs. Discovery candidates must be promoted before tailoring. For networking, use jobapps_find_people to cache public contacts and jobapps_create_gmail_draft only for drafts; never send email.")
         return {"context": "\n".join(lines)}
     except Exception as exc:
         return {"context": f"JobApps context bridge failed: {exc}"}

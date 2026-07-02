@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from .knowledge import normalize_space
+from .repository import canonical_pattern_type
 
 
 BANNED_TEXT = (
@@ -33,6 +34,15 @@ META_CONTAMINATION_PATTERNS = (
     "next step i would want",
     "follow up after",
 )
+
+RESUME_RELEVANT_PATTERN_TYPES = {
+    "truth_boundary",
+    "voice",
+    "positioning",
+    "materials_content",
+    "materials_format",
+    "materials_quality",
+}
 
 
 def draft_materials(
@@ -92,6 +102,29 @@ def _resume_notes(
             notes.append(f"Tailor to JD: {requirement} -> {portrayal}")
         elif requirement:
             notes.append(f"Tailor to JD: {requirement}")
+    notes.extend(_learning_pattern_notes(learning_patterns))
+    return notes
+
+
+def _learning_pattern_notes(learning_patterns: list[dict[str, Any]]) -> list[str]:
+    notes: list[str] = []
+    for pattern in learning_patterns:
+        pattern_type = canonical_pattern_type(str(pattern.get("pattern_type") or ""))
+        if pattern_type not in RESUME_RELEVANT_PATTERN_TYPES:
+            continue
+        preference = normalize_space(_clean_banned(str(pattern.get("preference") or "")))
+        if not preference:
+            continue
+        try:
+            _candidate_facing(preference)
+        except ValueError:
+            # Historical learning rows can describe internal workflow hygiene.
+            # The main prompt may use them as policy, but deterministic draft
+            # notes must not leak those internal labels into candidate material.
+            continue
+        notes.append(f"Saved {pattern_type.replace('_', ' ')} rule: {preference[:240]}")
+        if len(notes) >= 6:
+            break
     return notes
 
 
@@ -162,7 +195,7 @@ def _outreach(
     name: str,
     config: dict[str, Any],
 ) -> str:
-    first_name = name.split()[0] if name else "Prashant"
+    first_name = name.split()[0] if name else "the applicant"
     return (
         "Hi [Name],\n\n"
         f"I came across the {title} role at {company} and noticed that the work seems close to {angle.lower()}. "

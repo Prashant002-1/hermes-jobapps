@@ -139,7 +139,7 @@ JobApps supports launching material-preparation work for multiple job descriptio
 6. **Failure behavior:** if Hermes rejects or cannot start a run, the app run becomes `failed`, a `hermes_run_failed` event is recorded, and the job status is updated to `hermes_failed`. Other jobs' launch workers must continue unaffected.
 7. **Artifact isolation:** generated files are always written under `materials_path/<job_id>/`. No generated material may write outside that root, and child symlink components are rejected.
 
-This gives Prashant the practical workflow he needs: paste or promote several JDs, open each job in JobApps, start material prep, and let the app prepare resumes/cover letters/outreach in parallel while he submits applications from the official links.
+This gives the applicant the practical workflow they need: paste or promote several JDs, open each job in JobApps, start material prep, and let the app prepare resumes/cover letters/outreach in parallel while they submit applications from the official links.
 
 Native Hermes TUI sessions use the same contract through the project plugin:
 `jobapps_prepare_opportunity` creates structured JobApps jobs, blocker
@@ -148,7 +148,7 @@ does not author candidate-facing materials. Native Hermes file/patch/terminal
 tools own writing, compilation, and QA; `jobapps_save_material` and provenance
 tools link the finished artifacts back to the app. `jobapps_start_material_prep`
 can queue one job, selected job IDs, or all pending apply-intent jobs when
-Prashant wants background Hermes material-prep runs.
+The applicant wants background Hermes material-prep runs.
 
 These tools write to the same SQLite database as the cockpit, so multiple native
 `jobapps` profile TUI sessions stay isolated by job ID while sharing the same
@@ -161,10 +161,10 @@ Generated resume and cover-letter filenames should look like files a candidate i
 Canonical filename pattern:
 
 ```text
-Prashant Shah - Resume - <Company> - <Role>.tex
-Prashant Shah - Resume - <Company> - <Role>.pdf
-Prashant Shah - Cover Letter - <Company> - <Role>.tex
-Prashant Shah - Cover Letter - <Company> - <Role>.pdf
+Applicant Name - Resume - <Company> - <Role>.tex
+Applicant Name - Resume - <Company> - <Role>.pdf
+Applicant Name - Cover Letter - <Company> - <Role>.tex
+Applicant Name - Cover Letter - <Company> - <Role>.pdf
 ```
 
 Rules:
@@ -180,7 +180,7 @@ Rules:
 
 Use native Hermes tools as the workbench for writing, file creation, reading, patching, diffing, local Typst/TeX compilation, QA, and normal artifact edits. Use JobApps tools for targeted retrieval and structured app-state changes: job records, eligible evidence, research notes, material links/provenance, contacts, follow-ups, and application status.
 
-Default JobApps tool exposure should stay lean. Broad context/audit tools and app-owned authoring helpers are retained for dashboard/debug/internal workflows, but should not be advertised to normal material-generation runs unless Prashant asks for audit/admin behavior or JobApps-specific state semantics are required.
+Default JobApps tool exposure should stay lean. Broad context/audit tools and app-owned authoring helpers are retained for dashboard/debug/internal workflows, but should not be advertised to normal material-generation runs unless the applicant asks for audit/admin behavior or JobApps-specific state semantics are required.
 
 Use Hermes memory for durable preferences and lessons. Do not store application history only in Hermes memory, and do not store every session memory item in the JobApps database.
 

@@ -34,8 +34,16 @@ from .writers import draft_materials
 TOOL_SPECS: list[dict[str, Any]] = [
     {
         "name": "jobapps_read_context",
-        "description": "Read JobApps profile facts, proof points, recent applications, progress, follow-ups, approvals, and health.",
-        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+        "description": "Read a compact admin/debug context packet. Normal material work should prefer targeted retrieval tools instead of this broad context tool.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "use": {"type": "string", "description": "Evidence use filter, e.g. resume, cover_letter, outreach, interview."},
+                "limit": {"type": "integer", "description": "Maximum recent rows for compact lists."},
+                "include_dashboard": {"type": "boolean", "description": "Admin/debug only: attach compact dashboard state."},
+            },
+            "additionalProperties": False,
+        },
         "writes": False,
     },
     {
@@ -609,12 +617,29 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_record_learning_pattern",
-        "description": "Persist a reusable user correction or portrayal preference so future job materials follow it.",
+        "description": (
+            "Persist a reusable user correction or portrayal preference so future job materials follow it. "
+            "pattern_type must be one of: truth_boundary, voice, positioning, materials_content, "
+            "materials_format, materials_quality, outreach, workflow (free-form types are normalized into "
+            "this taxonomy). Near-duplicate patterns of the same type are merged in place, not appended."
+        ),
         "input_schema": {
             "type": "object",
             "required": ["pattern_type", "trigger", "preference"],
             "properties": {
-                "pattern_type": {"type": "string"},
+                "pattern_type": {
+                    "type": "string",
+                    "enum": [
+                        "truth_boundary",
+                        "voice",
+                        "positioning",
+                        "materials_content",
+                        "materials_format",
+                        "materials_quality",
+                        "outreach",
+                        "workflow",
+                    ],
+                },
                 "trigger": {"type": "string"},
                 "preference": {"type": "string"},
                 "source": {"type": "string"},
@@ -806,6 +831,21 @@ def specs_for_exposure(exposure: str = "default") -> list[dict[str, Any]]:
     return [dict(spec) for spec in ALL_TOOL_SPECS if spec["exposure"] == normalized]
 
 
+_REQUIRED_FIELDS_BY_TOOL: dict[str, tuple[str, ...]] = {
+    spec["name"]: tuple(spec.get("input_schema", {}).get("required", ()))
+    for spec in ALL_TOOL_SPECS
+}
+
+
+def _missing_required_fields(name: str, payload: dict[str, Any]) -> list[str]:
+    required = _REQUIRED_FIELDS_BY_TOOL.get(name, ())
+    return [
+        field
+        for field in required
+        if payload.get(field) is None or (isinstance(payload.get(field), str) and not payload[field].strip())
+    ]
+
+
 class AgentToolbox:
     def __init__(
         self,
@@ -878,6 +918,17 @@ class AgentToolbox:
     def execute(self, name: str, payload: dict[str, Any], run_id: str | None = None) -> dict[str, Any]:
         if name not in self._handlers:
             raise KeyError(f"Unknown tool: {name}")
+        payload = payload if isinstance(payload, dict) else {}
+        missing = _missing_required_fields(name, payload)
+        if missing:
+            output = {
+                "error": (
+                    f"{name} is missing required field(s): {', '.join(missing)}. "
+                    f"Provided fields: {sorted(payload.keys()) or 'none'}."
+                )
+            }
+            self.repo.record_tool_call(name, payload, output, status="failed", run_id=run_id)
+            raise ValueError(output["error"])
         try:
             output = self._handlers[name](payload)
             status = "completed"
@@ -890,7 +941,47 @@ class AgentToolbox:
         return output
 
     def _read_context(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.repo.dashboard() | {"career_context": self.repo.career_context()}
+        """Return compact context for admin/debug use without hydrating dashboard by default."""
+        result_limit = parse_limit(payload.get("limit", 20), default=20, maximum=80)
+        use = payload.get("use") or "resume"
+        career = self.repo.career_context(use=use)
+        brain_context = career.get("brain_context") or {}
+        output: dict[str, Any] = {
+            "scope": "compact_admin_context",
+            "usage_note": (
+                "For normal material work, prefer jobapps_retrieve_for_job, "
+                "jobapps_search_evidence, jobapps_search_brain, or jobapps_brain_context. "
+                "This tool intentionally omits full dashboard/job payloads unless include_dashboard is true."
+            ),
+            "summary": self.repo.instruction_summary(),
+            "career_context": {
+                "profile_facts": career.get("profile_facts", []),
+                "proof_points": career.get("proof_points", []),
+                "learning_patterns": career.get("learning_patterns", []),
+                "recent_tailoring_requirements": career.get("recent_tailoring_requirements", [])[:result_limit],
+                "recent_portrayal_decisions": career.get("recent_portrayal_decisions", [])[:result_limit],
+                "recent_jobs": [
+                    {
+                        "id": item.get("id"),
+                        "title": item.get("title"),
+                        "company": item.get("company"),
+                        "status": item.get("status"),
+                        "decision": item.get("decision"),
+                        "role_family": item.get("role_family"),
+                        "next_action": item.get("next_action"),
+                    }
+                    for item in career.get("recent_jobs", [])[:result_limit]
+                ],
+                "brain_context": {
+                    "entity_counts": brain_context.get("entity_counts", {}),
+                    "event_counts": brain_context.get("event_counts", {}),
+                    "recent_events": (brain_context.get("recent_events") or [])[: min(result_limit, 10)],
+                },
+            },
+        }
+        if parse_bool(payload.get("include_dashboard", False), "include_dashboard", default=False):
+            output["dashboard"] = self.repo.dashboard()
+        return output
 
     def _database_health(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.repo.database_health()
@@ -1214,7 +1305,7 @@ class AgentToolbox:
     def _create_resume_typst(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = self.repo.get_job(payload["job_id"])["job"]
         context = self.repo.career_context()
-        name = payload.get("name") or _profile_value(context, "name", "Prashant Shah")
+        name = payload.get("name") or _profile_value(context, "name", "Applicant Name")
         headline = payload.get("headline") or f"AI Engineer focused on agentic systems for {job.get('title') or 'target roles'}"
         typst = build_full_resume_typst(name=name, headline=headline, sections=payload.get("sections") or [])
         filename = job_material_filename(job, "resume", "typ")
@@ -1251,7 +1342,7 @@ class AgentToolbox:
             body=payload["body"],
             company=payload.get("company") or job.get("company") or "Hiring Team",
             role_title=payload.get("role_title") or job.get("title") or "Target Role",
-            name=payload.get("name") or _profile_value(context, "name", "Prashant Shah"),
+            name=payload.get("name") or _profile_value(context, "name", "Applicant Name"),
         )
         filename = job_material_filename(job, "cover_letter", "tex")
         file_path = write_material_artifact(

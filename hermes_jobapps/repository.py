@@ -45,9 +45,78 @@ JOB_APPLIED_STATUSES = {
 JOB_SKIP_STATUSES = {"skip", "skipped", "not_interested", "not_needed"}
 MATERIAL_REVIEW_STATUSES = {"materials_ready_for_review"}
 ACTION_RESOLVED_STATUSES = set(ACTION_CLOSED_STATUSES) | {"approved", "rejected", "superseded"}
-TOOL_CALL_INLINE_LIMIT_BYTES = 1_000_000
+TOOL_CALL_INLINE_LIMIT_BYTES = 200_000
 TOOL_CALL_ARCHIVE_ROOT = Path("data/tool-call-archive")
 STATE_REVISION_KEY = "state_revision"
+
+# Fixed learning-pattern taxonomy. Free-form pattern types produced one-off
+# names per session (47 types for ~55 rows), which made retrieval and
+# consolidation impossible. Every write is normalized into one of these.
+LEARNING_PATTERN_TYPES = (
+    "truth_boundary",     # facts/claims boundaries, GPA display, contamination rules
+    "voice",              # writing voice for candidate-facing prose
+    "positioning",        # how to portray projects/experience/identity
+    "materials_content",  # bullet framing, section selection, substance rules
+    "materials_format",   # typography, layout, filenames, compile conventions
+    "materials_quality",  # QA gates, density, whitespace, word counts
+    "outreach",           # networking/outreach channel, formatting, voice
+    "workflow",           # process rules: apply intent, approvals, tracking
+)
+
+_PATTERN_TYPE_KEYWORDS: tuple[tuple[str, str], ...] = (
+    ("boundary", "truth_boundary"),
+    ("truth", "truth_boundary"),
+    ("fact", "truth_boundary"),
+    ("outreach", "outreach"),
+    ("networking", "outreach"),
+    ("voice", "voice"),
+    ("quality", "materials_quality"),
+    ("layout_qa", "materials_quality"),
+    ("format", "materials_format"),
+    ("layout", "materials_format"),
+    ("typograph", "materials_format"),
+    ("template", "materials_format"),
+    ("portray", "positioning"),
+    ("framing", "positioning"),
+    ("positioning", "positioning"),
+    ("answer_framing", "positioning"),
+    ("section", "materials_content"),
+    ("bullet", "materials_content"),
+    ("structure", "materials_content"),
+    ("material", "materials_content"),
+    ("resume", "materials_content"),
+    ("cover_letter", "materials_content"),
+)
+
+
+def canonical_pattern_type(value: str | None) -> str:
+    """Normalize a free-form pattern type into the fixed taxonomy."""
+    raw = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in LEARNING_PATTERN_TYPES:
+        return raw
+    for keyword, canonical in _PATTERN_TYPE_KEYWORDS:
+        if keyword in raw:
+            return canonical
+    return "workflow"
+
+
+def _pattern_word_set(*texts: str) -> set[str]:
+    words = set()
+    for text in texts:
+        words.update(re.findall(r"[a-z0-9]+", (text or "").lower()))
+    return words
+
+
+def pattern_similarity(a_trigger: str, a_preference: str, b_trigger: str, b_preference: str) -> float:
+    """Jaccard similarity over the combined trigger+preference word sets."""
+    a = _pattern_word_set(a_trigger, a_preference)
+    b = _pattern_word_set(b_trigger, b_preference)
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+LEARNING_PATTERN_MERGE_THRESHOLD = 0.55
 
 
 class JobRepository:
@@ -1424,8 +1493,51 @@ class JobRepository:
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
-        pattern_id = uuid.uuid4().hex[:12]
+        pattern_type = canonical_pattern_type(pattern_type)
         with self._connect() as conn:
+            # Merge instead of accumulate: if an existing pattern of the same
+            # canonical type says nearly the same thing, update it in place so
+            # the pattern library stays small enough to inject whole.
+            existing_rows = conn.execute(
+                "SELECT * FROM learning_patterns WHERE pattern_type = ?",
+                (pattern_type,),
+            ).fetchall()
+            merge_target = None
+            best_similarity = 0.0
+            for row in existing_rows:
+                similarity = pattern_similarity(
+                    row["trigger"], row["preference"], trigger, preference
+                )
+                if similarity >= LEARNING_PATTERN_MERGE_THRESHOLD and similarity > best_similarity:
+                    merge_target = row
+                    best_similarity = similarity
+            if merge_target is not None:
+                merged_metadata = json.loads(merge_target["metadata"] or "{}")
+                merged_metadata.update(metadata or {})
+                merged_metadata["merged_updates"] = int(merged_metadata.get("merged_updates", 0)) + 1
+                conn.execute(
+                    """
+                    UPDATE learning_patterns
+                    SET trigger = ?, preference = ?, source = ?, confidence = ?,
+                        metadata = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        trigger,
+                        preference,
+                        source or "agent",
+                        max(float(confidence), float(merge_target["confidence"] or 0.0)),
+                        json.dumps(merged_metadata),
+                        now,
+                        merge_target["id"],
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM learning_patterns WHERE id = ?", (merge_target["id"],)
+                ).fetchone()
+                return decode_learning_pattern(row) | {"merged": True, "similarity": round(best_similarity, 3)}
+
+            pattern_id = uuid.uuid4().hex[:12]
             conn.execute(
                 """
                 INSERT INTO learning_patterns (
@@ -1886,6 +1998,14 @@ class JobRepository:
         now = utc_now()
         followup_id = uuid.uuid4().hex[:12]
         with self._connect() as conn:
+            # Pre-check foreign keys so the agent gets an actionable message
+            # instead of a bare "FOREIGN KEY constraint failed".
+            if job_id and not conn.execute("SELECT 1 FROM jobs WHERE id = ?", (job_id,)).fetchone():
+                raise ValueError(f"Follow-up references unknown job_id {job_id!r}.")
+            if contact_id and not conn.execute(
+                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+            ).fetchone():
+                raise ValueError(f"Follow-up references unknown contact_id {contact_id!r}.")
             conn.execute(
                 """
                 INSERT INTO followups (id, job_id, contact_id, due_date, reason, status, created_at, updated_at)
@@ -2131,6 +2251,48 @@ class JobRepository:
             output.append(item)
         return output
 
+    def instruction_summary(self) -> dict[str, Any]:
+        """Cheap dashboard-shaped summary for prompt instructions.
+
+        build_chat_instructions only needs counts, a few recent brain events,
+        and five recent job headers. The full dashboard() hydrates every job
+        and costs hundreds of queries; this stays O(a few queries).
+        """
+        with self._connect() as conn:
+            followup_count = conn.execute(
+                f"SELECT COUNT(*) FROM followups WHERE lower(COALESCE(status, '')) NOT IN {ACTION_CLOSED_SQL}"
+            ).fetchone()[0]
+            progress_count = conn.execute(
+                f"SELECT COUNT(*) FROM progress_items WHERE lower(COALESCE(status, '')) NOT IN {ACTION_CLOSED_SQL}"
+            ).fetchone()[0]
+            approval_count = conn.execute(
+                "SELECT COUNT(*) FROM approvals WHERE status = 'pending'"
+            ).fetchone()[0]
+            counts = {
+                "profile_facts": conn.execute("SELECT COUNT(*) FROM profile_facts").fetchone()[0],
+                "proof_points": conn.execute("SELECT COUNT(*) FROM proof_points").fetchone()[0],
+                "application_signals": conn.execute("SELECT COUNT(*) FROM application_signals").fetchone()[0],
+                "tailoring_requirements": conn.execute("SELECT COUNT(*) FROM tailoring_requirements").fetchone()[0],
+                "portrayal_decisions": conn.execute("SELECT COUNT(*) FROM portrayal_decisions").fetchone()[0],
+                "learning_patterns": conn.execute("SELECT COUNT(*) FROM learning_patterns").fetchone()[0],
+                "brain_entities": conn.execute("SELECT COUNT(*) FROM brain_entities").fetchone()[0],
+                "brain_events": conn.execute("SELECT COUNT(*) FROM brain_events").fetchone()[0],
+            }
+            job_rows = conn.execute(
+                "SELECT id, title, company, status, decision, role_family FROM jobs ORDER BY updated_at DESC LIMIT 5"
+            ).fetchall()
+        return {
+            "context_counts": counts,
+            "followup_count": followup_count,
+            "progress_count": progress_count,
+            "approval_count": approval_count,
+            "followups": [],
+            "progress_items": [],
+            "approvals": [],
+            "brain": {"recent_events": self.list_brain_events(limit=5)},
+            "jobs": [dict(row) for row in job_rows],
+        }
+
     def dashboard(self) -> dict[str, Any]:
         with self._connect() as conn:
             followups = conn.execute(
@@ -2179,17 +2341,22 @@ class JobRepository:
             "job_count": len(jobs),
             "job_state_counts": _job_state_counts(jobs),
             "discovery": {
-                "candidates": self.list_discovery_candidates(limit=80),
+                # raw_payload/full descriptions are provenance, not dashboard data;
+                # detail endpoints return the full candidate when needed.
+                "candidates": [
+                    _compact_discovery_candidate(item)
+                    for item in self.list_discovery_candidates(limit=80)
+                ],
                 "counts": self.discovery_counts(),
             },
-            "contacts": self.list_contacts(limit=80),
+            "contacts": [_compact_contact(item) for item in self.list_contacts(limit=80)],
             "followup_count": len(followup_rows),
             "progress_count": len(progress_rows),
             "approval_count": len(approval_rows),
             "followups": followup_rows,
             "progress_items": progress_rows,
             "approvals": approval_rows,
-            "prompt_builds": [decode_prompt(row) for row in prompts],
+            "prompt_builds": [_compact_prompt_build(decode_prompt(row)) for row in prompts],
             "agent_runs": [decode_agent_run(row) for row in agent_runs],
             "learning_patterns": self.list_learning_patterns(limit=40),
             "brain": self.brain_context(limit=30),
@@ -2209,7 +2376,7 @@ class JobRepository:
         }
 
     def _dashboard_job(self, record: dict[str, Any]) -> dict[str, Any]:
-        job = dict(record["job"])
+        job = _compact_dashboard_job_base(record["job"])
         evaluation = record.get("evaluation") or {}
         materials = record.get("materials") or []
         material_revisions = record.get("material_revisions") or []
@@ -2227,20 +2394,23 @@ class JobRepository:
         latest_run = agent_runs[0] if agent_runs else None
 
         material_by_kind = {item.get("kind"): item for item in materials}
-        job["evaluation"] = evaluation
+        job["evaluation"] = _compact_dashboard_evaluation(evaluation)
         job["decision"] = job.get("decision") or evaluation.get("decision")
         job["role_family"] = job.get("role_family") or evaluation.get("role_family")
         job["next_action"] = job.get("next_action") or evaluation.get("next_action")
         job["risks"] = _dashboard_risks(evaluation)
-        job["resume_tex"] = _material_content(material_by_kind.get("resume_tailoring"))
-        job["cover_letter_tex"] = _material_content(material_by_kind.get("cover_letter"))
-        job["prompt"] = prompts[0]["prompt"] if prompts else ""
-        job["hermes_output"] = _latest_run_output(agent_runs)
+        job["resume_tex"] = _clip_text(_material_content(material_by_kind.get("resume_tailoring")), 1600)
+        job["cover_letter_tex"] = _clip_text(_material_content(material_by_kind.get("cover_letter")), 1600)
+        # The full opportunity prompt can run to hundreds of KB per job and is
+        # only ever shown as an optional preview. Ship a capped preview; the
+        # full text stays in prompt_builds for audit retrieval.
+        job["prompt"] = _clip_text(prompts[0]["prompt"] if prompts else "", 1200)
+        job["hermes_output"] = _clip_text(_latest_run_output(agent_runs), 4000)
         job["research_notes"] = [
             {
                 "id": item.get("id"),
                 "subject": item.get("subject", ""),
-                "content": item.get("summary", ""),
+                "content": _clip_text(item.get("summary", ""), 500),
                 "source_url": item.get("source_url", ""),
                 "confidence": item.get("confidence"),
             }
@@ -2257,15 +2427,17 @@ class JobRepository:
             for item in progress
         ]
         job["followups"] = [dict(item) for item in followups]
-        job["contacts"] = contacts
+        job["contacts"] = [_compact_contact(item) for item in contacts]
         job["outreach"] = _dashboard_outreach(materials, contacts, followups)
         job["events"] = [_dashboard_event(item) for item in events]
-        job["materials"] = materials
-        job["material_revisions"] = material_revisions
-        job["tailoring_requirements"] = tailoring_requirements
-        job["portrayal_decisions"] = portrayal_decisions
-        job["application_signals"] = application_signals
-        job["brain_events"] = brain_events
+        # Material full content stays retrievable per material; the dashboard
+        # list ships summaries only (the workbench carries capped previews).
+        job["materials"] = [_compact_material_reference(item) for item in materials]
+        job["material_revisions"] = [_compact_dashboard_revision(item) for item in material_revisions[:5]]
+        job["tailoring_requirements"] = [_compact_tailoring_requirement(item) for item in tailoring_requirements]
+        job["portrayal_decisions"] = [_compact_portrayal_decision(item) for item in portrayal_decisions]
+        job["application_signals"] = [_compact_application_signal(item) for item in application_signals]
+        job["brain_events"] = [_compact_dashboard_brain_event(item) for item in brain_events[:5]]
         job["materials_workbench"] = _materials_workbench(materials, material_revisions)
         job["approvals"] = record.get("approvals") or []
         job["active_run"] = _active_hermes_run(agent_runs)
@@ -3427,7 +3599,9 @@ class JobRepository:
             )
             if fts_query:
                 clauses = ["retrieval_chunks_fts MATCH ?"] + clauses
-                query_params: list[Any] = [fts_query] + params + [result_limit]
+                # Fetch extra headroom so the role-family affinity re-rank has
+                # candidates to promote; the final cut happens after re-ranking.
+                query_params: list[Any] = [fts_query] + params + [result_limit * 3]
                 try:
                     rows = conn.execute(
                         f"""
@@ -3481,6 +3655,14 @@ class JobRepository:
                 [item | {"rank": -len(terms & set(keywords_for_text(item["text"])))} for item in candidates],
                 key=lambda item: item.get("rank", 0),
             )[:result_limit]
+        if role_family:
+            # bm25 rank: lower is better. Subtracting the affinity boost pulls
+            # same-lane proof points up without excluding cross-lane evidence.
+            for item in candidates:
+                affinity = role_family_affinity(item.get("role_family"), role_family)
+                item["role_family_affinity"] = round(affinity, 3)
+                item["rank"] = float(item.get("rank", 0)) - affinity * 3.0
+            candidates.sort(key=lambda item: item.get("rank", 0))
         eligible = []
         for item in candidates:
             if item.get("source_table") != "proof_points":
@@ -3641,7 +3823,10 @@ class JobRepository:
             "profile_facts": self.list_profile_facts(),
             "proof_points": self.list_proof_points(use=use),
             "recent_jobs": self.list_jobs(limit=12),
-            "learning_patterns": self.list_learning_patterns(limit=40),
+            # Learning patterns are the personalization rulebook. They are
+            # bounded by merge-on-write, so inject all of them: a recency cap
+            # silently dropped the oldest (often most fundamental) rules.
+            "learning_patterns": self.list_learning_patterns(limit=400),
             "brain_context": self.brain_context(limit=12),
             "recent_tailoring_requirements": self.list_tailoring_requirements(limit=40),
             "recent_portrayal_decisions": self.list_portrayal_decisions(limit=40),
@@ -4369,9 +4554,9 @@ def _materials_workbench(materials: list[dict[str, Any]], revisions: list[dict[s
         summary = _material_summary(material, revision_counts, latest_revision)
         items.append(summary)
         kind = material.get("kind") or "material"
-        primary[kind] = summary
+        primary[kind] = _primary_material_reference(summary)
         if kind == "resume_tailoring" and "resume" not in primary:
-            primary["resume"] = summary
+            primary["resume"] = _primary_material_reference(summary)
     return {
         "items": items,
         "primary": primary,
@@ -4387,12 +4572,15 @@ def _material_summary(
     latest_revision: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     metadata = material.get("metadata") or {}
-    compile_info = metadata.get("compile") or {}
+    compile_info = _material_compile_info(metadata)
     pdf_path = _material_existing_pdf_path(material)
     compile_status = "compiled" if pdf_path else "not_compiled"
     material_id = material.get("id", "")
     filename = _material_display_name(material)
-    content_preview = "" if material.get("format") == "tex" else str(material.get("content") or "")[:4000]
+    # Full content is fetchable per material via /api/materials/<id>.
+    # Dashboard state should carry references and compile status, not text bodies.
+    content_preview = ""
+    latest = latest_revision.get(material_id)
     return {
         "id": material_id,
         "kind": material.get("kind", ""),
@@ -4404,7 +4592,7 @@ def _material_summary(
         "rationale": material.get("rationale", ""),
         "source": material.get("source", ""),
         "revision_count": revision_counts.get(material_id, 0),
-        "latest_revision": latest_revision.get(material_id),
+        "latest_revision": _compact_dashboard_revision(latest) if latest else None,
         "compile_status": compile_status,
         "pdf_path": pdf_path,
         "log_path": compile_info.get("log_path", ""),
@@ -4416,7 +4604,7 @@ def _material_summary(
 
 def _material_existing_pdf_path(material: dict[str, Any]) -> str:
     metadata = material.get("metadata") or {}
-    compile_info = metadata.get("compile") or {}
+    compile_info = _material_compile_info(metadata)
     content_metadata = material_payload_metadata(material.get("content"))
     candidates = [
         compile_info.get("pdf_path"),
@@ -4448,7 +4636,8 @@ def _material_display_name(material: dict[str, Any]) -> str:
     file_path = str(material.get("file_path") or "")
     if file_path:
         return Path(file_path).name
-    pdf_path = str((metadata.get("compile") or {}).get("pdf_path") or metadata.get("pdf_path") or content_metadata.get("pdf_path") or "")
+    compile_info = _material_compile_info(metadata)
+    pdf_path = str(compile_info.get("pdf_path") or metadata.get("pdf_path") or content_metadata.get("pdf_path") or "")
     if pdf_path:
         return Path(pdf_path).name
     if metadata.get("subject"):
@@ -4456,6 +4645,203 @@ def _material_display_name(material: dict[str, Any]) -> str:
     extension = material.get("format") or "txt"
     kind = str(material.get("kind") or "material")
     return f"{kind}.{extension}"
+
+
+def _material_compile_info(metadata: dict[str, Any]) -> dict[str, Any]:
+    value = metadata.get("compile") if isinstance(metadata, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _clip_text(value: Any, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[: limit - 60] + f"\n… [truncated; {len(text)} chars total]"
+
+
+def _compact_discovery_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(candidate)
+    compact.pop("raw_payload", None)
+    compact["description"] = _clip_text(compact.get("description"), 800)
+    if "application_form_summary" in compact:
+        compact["application_form_summary"] = _clip_text(compact.get("application_form_summary"), 400)
+    return compact
+
+
+def _compact_contact(contact: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": contact.get("id", ""),
+        "name": contact.get("name", ""),
+        "company": contact.get("company", ""),
+        "role": contact.get("role", ""),
+        "email": contact.get("email", ""),
+        "email_status": contact.get("email_status", ""),
+        "linkedin_url": contact.get("linkedin_url", ""),
+        "source_url": contact.get("source_url", ""),
+        "job_id": contact.get("job_id", ""),
+        "updated_at": contact.get("updated_at", ""),
+    }
+
+
+def _compact_prompt_build(item: dict[str, Any]) -> dict[str, Any]:
+    item = dict(item)
+    item["prompt"] = _clip_text(item.get("prompt"), 2000)
+    item["context_snapshot"] = {}
+    return item
+
+
+def _compact_dashboard_job_base(job: dict[str, Any]) -> dict[str, Any]:
+    """Dashboard job header without full JD/user-note payloads."""
+    keep = (
+        "id",
+        "title",
+        "company",
+        "location",
+        "url",
+        "apply_url",
+        "status",
+        "decision",
+        "role_family",
+        "next_action",
+        "hermes_run_id",
+        "created_at",
+        "updated_at",
+    )
+    return {key: job.get(key) for key in keep if key in job}
+
+
+def _primary_material_reference(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": summary.get("id", ""),
+        "kind": summary.get("kind", ""),
+        "format": summary.get("format", ""),
+        "display_name": summary.get("display_name", ""),
+        "pdf_path": summary.get("pdf_path", ""),
+        "compile_status": summary.get("compile_status", ""),
+        "has_content": summary.get("has_content", False),
+    }
+
+
+def _compact_dashboard_evaluation(evaluation: dict[str, Any]) -> dict[str, Any]:
+    if not evaluation:
+        return {}
+    compact = {
+        key: evaluation.get(key)
+        for key in (
+            "decision",
+            "role_family",
+            "next_action",
+            "sponsorship_risk",
+            "location_risk",
+            "seniority_risk",
+            "application_effort_risk",
+            "evaluation_mode",
+            "fit_assumption",
+        )
+        if key in evaluation
+    }
+    compact["blocker_flags"] = [
+        {
+            "area": item.get("area"),
+            "assessment": _clip_text(item.get("assessment") or item.get("evidence") or item.get("label"), 260),
+        }
+        for item in (evaluation.get("blocker_flags") or [])[:8]
+        if isinstance(item, dict)
+    ]
+    return compact
+
+
+def _compact_material_reference(material: dict[str, Any]) -> dict[str, Any]:
+    metadata = material.get("metadata") or {}
+    compile_info = _material_compile_info(metadata)
+    pdf_path = _material_existing_pdf_path(material)
+    return {
+        "id": material.get("id", ""),
+        "kind": material.get("kind", ""),
+        "format": material.get("format", ""),
+        "display_name": _material_display_name(material),
+        "file_path": material.get("file_path", ""),
+        "source": material.get("source", ""),
+        "has_content": bool(material.get("content")),
+        "pdf_path": pdf_path,
+        "compile_status": "compiled" if pdf_path else "not_compiled",
+        "updated_at": material.get("updated_at", ""),
+        "metadata": {key: metadata.get(key) for key in ("review_status", "display_name", "subject", "channel") if metadata.get(key)},
+        "log_path": compile_info.get("log_path", ""),
+    }
+
+
+def _compact_dashboard_material(material: dict[str, Any]) -> dict[str, Any]:
+    """Material row for dashboard lists: metadata without megabyte content."""
+    return {
+        "id": material.get("id", ""),
+        "kind": material.get("kind", ""),
+        "format": material.get("format", ""),
+        "file_path": material.get("file_path", ""),
+        "rationale": material.get("rationale", ""),
+        "source": material.get("source", ""),
+        "metadata": material.get("metadata") or {},
+        "content_preview": _clip_text(material.get("content"), 1200),
+        "has_content": bool(material.get("content")),
+        "created_at": material.get("created_at", ""),
+        "updated_at": material.get("updated_at", ""),
+    }
+
+
+def _compact_tailoring_requirement(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id", ""),
+        "requirement": _clip_text(item.get("requirement"), 320),
+        "source_text": _clip_text(item.get("source_text"), 260),
+        "category": item.get("category", ""),
+        "priority": item.get("priority"),
+        "status": item.get("status", ""),
+        "created_at": item.get("created_at", ""),
+    }
+
+
+def _compact_portrayal_decision(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id", ""),
+        "decision_type": item.get("decision_type", ""),
+        "target": item.get("target", ""),
+        "after_text": _clip_text(item.get("after_text"), 320),
+        "rationale": _clip_text(item.get("rationale"), 320),
+        "source": item.get("source", ""),
+        "created_at": item.get("created_at", ""),
+    }
+
+
+def _compact_application_signal(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": item.get("id", ""),
+        "signal_type": item.get("signal_type", ""),
+        "label": item.get("label", ""),
+        "value": _clip_text(item.get("value"), 320),
+        "evidence_text": _clip_text(item.get("evidence_text"), 260),
+        "confidence": item.get("confidence"),
+        "actionability": item.get("actionability", ""),
+        "created_at": item.get("created_at", ""),
+    }
+
+
+def _compact_dashboard_revision(revision: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        key: revision.get(key)
+        for key in ("id", "material_id", "version", "reason", "requirement", "created_at")
+    }
+    compact["diff_preview"] = _clip_text(revision.get("diff"), 800)
+    return compact
+
+
+def _compact_dashboard_brain_event(event: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": event.get("id", ""),
+        "event_type": event.get("event_type", ""),
+        "title": event.get("title", ""),
+        "content": _clip_text(event.get("content"), 400),
+        "occurred_at": event.get("occurred_at", ""),
+    }
 
 
 def _dashboard_outreach(
@@ -4488,8 +4874,8 @@ def _dashboard_outreach(
         )
     return {
         "drafts": drafts,
-        "contacts": contacts,
-        "followups": [dict(item) for item in followups],
+        # contacts/followups intentionally omitted: the job payload already
+        # carries them and the frontend falls back to job.contacts/job.followups.
         "draft_count": len(drafts),
         "contact_count": len(contacts),
         "followup_count": len(followups),
@@ -5265,6 +5651,29 @@ def proof_to_chunk_like(proof: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def role_family_affinity(chunk_family: str | None, requested_family: str | None) -> float:
+    """Token-overlap affinity between two free-text role-family labels.
+
+    Role families are written by different sessions with different vocabularies
+    ("full_stack" vs "full_stack_ai_data_systems"). Exact-equality filtering
+    silently dropped nearly all evidence, so role family is a ranking signal,
+    never an eligibility gate.
+    """
+    if not requested_family:
+        return 1.0
+    chunk_norm = str(chunk_family or "").strip().lower()
+    if not chunk_norm or chunk_norm in {"other", "general"}:
+        return 0.5
+    requested_tokens = set(re.findall(r"[a-z]+", requested_family.lower()))
+    chunk_tokens = set(re.findall(r"[a-z]+", chunk_norm))
+    if not requested_tokens or not chunk_tokens:
+        return 0.5
+    overlap = requested_tokens & chunk_tokens
+    if not overlap:
+        return 0.0
+    return len(overlap) / len(requested_tokens)
+
+
 def chunk_is_eligible(chunk: dict[str, Any], *, role_family: str | None = None, use: str = "resume") -> bool:
     if chunk.get("status") != "active":
         return False
@@ -5274,8 +5683,6 @@ def chunk_is_eligible(chunk: dict[str, Any], *, role_family: str | None = None, 
         return False
     allowed = chunk.get("allowed_uses") or []
     if use and allowed and use not in allowed:
-        return False
-    if role_family and chunk.get("role_family") not in {role_family, "other", ""}:
         return False
     return True
 
@@ -5316,11 +5723,11 @@ def retrieval_sql_filters(
     use: str | None,
     include_inactive: bool,
 ) -> tuple[list[str], list[Any]]:
+    # role_family is intentionally NOT a SQL filter: labels are free text and
+    # exact matching starved retrieval. It is applied as a ranking boost after
+    # the lifecycle-eligible rows come back (see role_family_affinity).
     clauses = [f"{alias}.source_table = 'proof_points'"]
     params: list[Any] = []
-    if role_family:
-        clauses.append(f"{alias}.role_family IN (?, 'other', '')")
-        params.append(role_family)
     if not include_inactive:
         clauses.append(f"{alias}.status = 'active'")
         clauses.append(f"{alias}.user_confirmed = 1")

@@ -8,7 +8,7 @@ Hermes JobApps is a career operating system, not a spray-and-pray job bot.
 
 The core experience is a cockpit:
 
-- **Inbox**: job links/descriptions Prashant is considering.
+- **Inbox**: job links/descriptions the applicant is considering.
 - **Blocker Preflight**: sponsorship/work authorization, seniority, location, risks, effort. No fit scoring.
 - **Research**: company context, sponsorship signal, product/team context, and networking targets.
 - **Tailoring**: JD requirements, matched proof points, gaps requiring user story, and portrayal decisions.
@@ -36,7 +36,7 @@ The interface should make the next action obvious. The agent should be visible: 
 
 4. **Personalizable system**
    - Use editable config and tool-updatable records for scoring weights, sponsorship rules, sources, templates, banned phrases, company notes, and profile facts.
-   - Let Prashant correct the system once and have that correction matter later.
+   - Let the applicant correct the system once and have that correction matter later.
 
 5. **One good workflow first**
    - Start with pasted links/descriptions.

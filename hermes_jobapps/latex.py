@@ -52,7 +52,7 @@ def build_cover_letter_tex(job: dict[str, Any], evaluation: dict[str, Any], draf
 
 {paragraphs}
 
-\closing{{Sincerely,\\Prashant Shah}}
+\closing{{Sincerely,\\Applicant Name}}
 \end{{letter}}
 
 % Target role: {title}
@@ -78,7 +78,7 @@ def job_material_filename(job: dict[str, Any], material_kind: str, extension: st
     title = _human_filename_part(str(job.get("title") or job.get("role") or "Role"), fallback="Role")
     artifact = _material_filename_label(material_kind)
     ext = _safe_extension(extension)
-    return safe_material_filename(f"Prashant Shah - {artifact} - {company} - {title}.{ext}")
+    return safe_material_filename(f"Applicant Name - {artifact} - {company} - {title}.{ext}")
 
 
 def safe_material_filename(filename: str) -> str:

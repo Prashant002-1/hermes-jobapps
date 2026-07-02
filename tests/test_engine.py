@@ -21,7 +21,7 @@ from hermes_jobapps.latex import compile_tex_to_pdf, job_material_filename, writ
 from hermes_jobapps.typst import compile_typst_to_pdf
 from hermes_jobapps.networking import NetworkingError, NetworkingService
 from hermes_jobapps.prompts import build_chat_instructions, build_opportunity_prompt
-from hermes_jobapps.repository import JobRepository
+from hermes_jobapps.repository import JobRepository, canonical_pattern_type
 from hermes_jobapps.runs import HermesRunManager, _extract_text
 from hermes_jobapps.server import AppState, create_handler
 from hermes_jobapps.tools import AgentToolbox, normalize_material_format, specs_for_exposure
@@ -769,8 +769,11 @@ class RepositoryTests(unittest.TestCase):
             )
             self.assertEqual(dashboard_job["outreach"]["drafts"][0]["id"], draft["id"])
             self.assertEqual(dashboard_job["outreach"]["drafts"][0]["subject"], "WeRide Data Engineer")
-            self.assertEqual(dashboard_job["outreach"]["contacts"][0]["id"], contact["id"])
-            self.assertEqual(dashboard_job["outreach"]["followups"][0]["id"], followup["id"])
+            # Contacts/followups ride on the job payload itself; outreach keeps counts.
+            self.assertEqual(dashboard_job["contacts"][0]["id"], contact["id"])
+            self.assertEqual(dashboard_job["followups"][0]["id"], followup["id"])
+            self.assertEqual(dashboard_job["outreach"]["contact_count"], 1)
+            self.assertEqual(dashboard_job["outreach"]["followup_count"], 1)
 
     def test_database_health_reports_unattached_records_without_deleting_them(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -978,7 +981,7 @@ class RepositoryTests(unittest.TestCase):
 
             context = repo.career_context()
 
-            self.assertEqual(context["learning_patterns"][0]["pattern_type"], "portrayal_preference")
+            self.assertEqual(context["learning_patterns"][0]["pattern_type"], "positioning")
             self.assertEqual(context["recent_tailoring_requirements"][0]["id"], requirement["id"])
             self.assertEqual(context["recent_portrayal_decisions"][0]["target"], "resume_tailoring.typ")
             self.assertIn("brain_context", context)
@@ -991,7 +994,7 @@ class RepositoryTests(unittest.TestCase):
             event = repo.record_brain_event(
                 "preference",
                 "Avoid generic enthusiasm",
-                "Prashant prefers direct, specific application writing over generic enthusiasm.",
+                "The applicant prefers direct, specific application writing over generic enthusiasm.",
                 entity_type="job_search",
                 entity_name="voice",
                 source="test",
@@ -1011,7 +1014,7 @@ class RepositoryTests(unittest.TestCase):
             repo = JobRepository(Path(tmpdir) / "state.sqlite3")
             repo.upsert_profile_fact(
                 "work_authorization",
-                "F-1 OPT with sponsorship sensitivity.",
+                "Applicant has work-authorization constraints and sponsorship sensitivity.",
                 category="constraint",
                 source="test",
             )
@@ -1222,6 +1225,48 @@ class EvidenceLayerTests(unittest.TestCase):
             results = repo.search_evidence("retrieval", role_family="ai_agent_systems", limit=1)
 
             self.assertEqual([item["source"]["id"] for item in results["results"]], [active["id"]])
+
+    def test_search_evidence_role_family_boosts_but_never_starves(self) -> None:
+        """Mismatched free-text role_family labels must not exclude confirmed proof.
+
+        Regression: role_family was an exact-match SQL filter, so a job classified
+        `full_stack` returned zero evidence even though confirmed proof existed
+        under `full_stack_ai_data_systems`. Role family is a ranking boost now.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            adjacent = repo.upsert_proof_point(
+                label="Cross-lane proof",
+                role_family="full_stack_ai_data_systems",
+                summary="React TypeScript REST APIs frontend backend product work.",
+                evidence="Confirmed full-stack product systems evidence.",
+                tags=["react", "typescript"],
+                source="test",
+                status="active",
+                user_confirmed=True,
+            )
+            same_lane = repo.upsert_proof_point(
+                label="Same-lane proof",
+                role_family="full_stack",
+                summary="React TypeScript REST APIs frontend backend product work.",
+                evidence="Confirmed full-stack evidence in the exact lane.",
+                tags=["react", "typescript"],
+                source="test",
+                status="active",
+                user_confirmed=True,
+            )
+
+            results = repo.search_evidence(
+                "React TypeScript REST APIs", role_family="full_stack", limit=8
+            )
+            returned_ids = [item["source"]["id"] for item in results["results"]]
+
+            self.assertIn(adjacent["id"], returned_ids)
+            self.assertIn(same_lane["id"], returned_ids)
+            # Same-lane proof outranks the cross-lane proof for equal text match.
+            self.assertLess(
+                returned_ids.index(same_lane["id"]), returned_ids.index(adjacent["id"])
+            )
 
     def test_prepare_opportunity_does_not_author_materials_from_resume_disallowed_proof(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1465,7 +1510,7 @@ class ToolTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(Path(saved["file_path"]).name, "Prashant Shah - Cover Letter - ExampleCo - AI Engineer.tex")
+            self.assertEqual(Path(saved["file_path"]).name, "Applicant Name - Cover Letter - ExampleCo - AI Engineer.tex")
             self.assertFalse(Path(saved["file_path"]).name == "cover_letter.tex")
             self.assertTrue(Path(saved["file_path"]).exists())
 
@@ -1494,7 +1539,7 @@ class ToolTests(unittest.TestCase):
             )
 
             self.assertEqual(saved["format"], "typ")
-            self.assertEqual(Path(saved["file_path"]).name, "Prashant Shah - Resume - ExampleCo - AI Engineer.typ")
+            self.assertEqual(Path(saved["file_path"]).name, "Applicant Name - Resume - ExampleCo - AI Engineer.typ")
             self.assertFalse(Path(saved["file_path"]).name == "resume_tailoring.typ")
             self.assertTrue(Path(saved["file_path"]).exists())
 
@@ -1523,7 +1568,7 @@ class ToolTests(unittest.TestCase):
             )
 
             self.assertEqual(saved["format"], "tex")
-            self.assertEqual(Path(saved["file_path"]).name, "Prashant Shah - Resume - ExampleCo - AI Engineer.tex")
+            self.assertEqual(Path(saved["file_path"]).name, "Applicant Name - Resume - ExampleCo - AI Engineer.tex")
             self.assertFalse(Path(saved["file_path"]).name == "resume_tailoring.typ")
             self.assertTrue(Path(saved["file_path"]).exists())
 
@@ -1682,8 +1727,35 @@ class ToolTests(unittest.TestCase):
                 },
             )
 
-            self.assertEqual(pattern["pattern_type"], "portrayal_preference")
+            self.assertEqual(pattern["pattern_type"], "positioning")
             self.assertEqual(repo.list_learning_patterns()[0]["id"], pattern["id"])
+
+    def test_learning_pattern_merges_near_duplicates_instead_of_appending(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            first = repo.record_learning_pattern(
+                "positioning",
+                trigger="agent roles ask for memory and evaluation",
+                preference="Use agent harness language instead of generic chatbot language.",
+                source="user_correction",
+            )
+            second = repo.record_learning_pattern(
+                "portrayal_preference",
+                trigger="agent roles ask for memory and evaluation traces",
+                preference="Use agent harness language instead of generic chatbot language everywhere.",
+                source="user_correction",
+            )
+
+            self.assertEqual(second["id"], first["id"])
+            self.assertTrue(second.get("merged"))
+            self.assertEqual(len(repo.list_learning_patterns()), 1)
+
+    def test_learning_pattern_normalizes_freeform_type_into_taxonomy(self) -> None:
+        self.assertEqual(canonical_pattern_type("resume_quality_correction"), "materials_quality")
+        self.assertEqual(canonical_pattern_type("outreach_voice_correction"), "outreach")
+        self.assertEqual(canonical_pattern_type("materials_boundary"), "truth_boundary")
+        self.assertEqual(canonical_pattern_type("voice"), "voice")
+        self.assertEqual(canonical_pattern_type("something_novel"), "workflow")
 
     def test_brain_tools_persist_and_search_human_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1797,7 +1869,12 @@ class WritingPromptTests(unittest.TestCase):
                     "pattern_type": "portrayal_preference",
                     "trigger": "agent roles ask for memory and evaluation",
                     "preference": "Use agent harness language instead of generic chatbot language.",
-                }
+                },
+                {
+                    "pattern_type": "materials_content",
+                    "trigger": "resume notes for agent workflow roles",
+                    "preference": "Keep the resume anchored in dashboard-owned state and tool-call boundaries.",
+                },
             ],
         }
 
@@ -1805,6 +1882,7 @@ class WritingPromptTests(unittest.TestCase):
         joined = "\n".join(drafts["resume_notes"]) + "\n" + drafts["cover_letter"]
 
         self.assertIn("agent harness language", joined)
+        self.assertIn("dashboard-owned state", joined)
         self.assertIn("Build LLM agents with memory and evaluation traces", joined)
         self.assertNotIn("Treat as a gap", joined)
         self.assertNotIn("Learned preference", joined)
@@ -2209,8 +2287,8 @@ class MaterialWorkbenchTests(unittest.TestCase):
 
             self.assertEqual(resume["kind"], "resume")
             self.assertEqual(letter["kind"], "cover_letter")
-            self.assertEqual(Path(resume["file_path"]).name, "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.typ")
-            self.assertEqual(Path(letter["file_path"]).name, "Prashant Shah - Cover Letter - WeRide - New Grads 2026 Data Engineer.tex")
+            self.assertEqual(Path(resume["file_path"]).name, "Applicant Name - Resume - WeRide - New Grads 2026 Data Engineer.typ")
+            self.assertEqual(Path(letter["file_path"]).name, "Applicant Name - Cover Letter - WeRide - New Grads 2026 Data Engineer.tex")
             self.assertFalse(Path(resume["file_path"]).name == "resume.typ")
             self.assertFalse(Path(letter["file_path"]).name == "cover_letter.tex")
             dashboard_job = repo.dashboard()["jobs"][0]
@@ -2218,7 +2296,7 @@ class MaterialWorkbenchTests(unittest.TestCase):
             self.assertEqual(dashboard_job["materials_workbench"]["primary"]["resume"]["id"], resume["id"])
             self.assertEqual(
                 dashboard_job["materials_workbench"]["primary"]["resume"]["display_name"],
-                "Prashant Shah - Resume - WeRide - New Grads 2026 Data Engineer.typ",
+                "Applicant Name - Resume - WeRide - New Grads 2026 Data Engineer.typ",
             )
 
     def test_professional_material_filename_sanitizes_without_looking_programmatic(self) -> None:
@@ -2228,7 +2306,7 @@ class MaterialWorkbenchTests(unittest.TestCase):
             "PDF",
         )
 
-        self.assertEqual(filename, "Prashant Shah - Resume - ACME Data Inc. - Software Engineer New Grad Backend.pdf")
+        self.assertEqual(filename, "Applicant Name - Resume - ACME Data Inc. - Software Engineer New Grad Backend.pdf")
         self.assertNotIn("_", filename)
         self.assertNotIn("/", filename)
 
@@ -2344,6 +2422,31 @@ class MaterialWorkbenchTests(unittest.TestCase):
             summary = next(item for item in dashboard_job["materials_workbench"]["items"] if item["id"] == material["id"])
 
             self.assertEqual(material["format"], "typ")
+            self.assertEqual(summary["pdf_path"], str(pdf_path))
+            self.assertEqual(summary["compile_status"], "compiled")
+
+    def test_material_workbench_tolerates_legacy_string_compile_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            record = self._create_job(repo)
+            material_dir = Path(tmpdir) / "materials" / record["job"]["id"]
+            material_dir.mkdir(parents=True)
+            typ_path = material_dir / "resume.typ"
+            pdf_path = material_dir / "resume.pdf"
+            typ_path.write_text("#show: doc => doc\nResume", encoding="utf-8")
+            pdf_path.write_bytes(b"%PDF-1.4\n")
+            material = repo.save_material(
+                record["job"]["id"],
+                "resume",
+                "#show: doc => doc\nResume",
+                format="typst",
+                file_path=str(typ_path),
+                metadata={"compile": "typst"},
+            )
+
+            dashboard_job = repo.dashboard()["jobs"][0]
+            summary = next(item for item in dashboard_job["materials_workbench"]["items"] if item["id"] == material["id"])
+
             self.assertEqual(summary["pdf_path"], str(pdf_path))
             self.assertEqual(summary["compile_status"], "compiled")
 
@@ -3100,6 +3203,24 @@ class ChatOrchestratorTests(unittest.TestCase):
             self.assertNotIn("jobapps_read_context", default_names)
             self.assertIn("jobapps_patch_material", all_names)
             self.assertIn("jobapps_read_context", all_names)
+
+    def test_jobapps_read_context_returns_compact_admin_packet_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = JobRepository(Path(tmpdir) / "state.sqlite3")
+            seed_context(repo)
+            toolbox = AgentToolbox(repo, load_config())
+
+            output = toolbox.execute("jobapps_read_context", {"limit": 5})
+            serialized = json.dumps(output)
+
+            self.assertEqual(output["scope"], "compact_admin_context")
+            self.assertIn("summary", output)
+            self.assertIn("career_context", output)
+            self.assertIn("proof_points", output["career_context"])
+            self.assertNotIn("dashboard", output)
+            self.assertNotIn("database_health", output)
+            self.assertNotIn("active_job", output)
+            self.assertLess(len(serialized), 60_000)
 
     def test_native_plugin_manifest_and_skill_follow_default_tool_boundary(self) -> None:
         root = Path(__file__).resolve().parents[1]

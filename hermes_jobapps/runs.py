@@ -142,7 +142,7 @@ class HermesRunManager:
             self.repo.record_agent_run_event(app_run_id, "hermes_run_starting", {"session_id": session_id})
             response = self.hermes.start_run(
                 prompt,
-                instructions=build_chat_instructions(self.repo.dashboard(), self.toolbox.specs()),
+                instructions=build_chat_instructions(self.repo.instruction_summary(), self.toolbox.specs()),
                 session_id=session_id,
                 session_key=self.session_key,
             )

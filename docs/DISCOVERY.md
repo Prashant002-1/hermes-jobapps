@@ -2,7 +2,7 @@
 
 Hermes JobApps discovery is a removable lead feed, not an application bot.
 It exists to find current candidate roles, hydrate the strongest official job
-source available, run blocker preflight, and let Prashant choose whether to
+source available, run blocker preflight, and let the applicant choose whether to
 promote the role into the normal JobApps workflow.
 
 ## Current Path

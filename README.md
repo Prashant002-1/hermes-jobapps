@@ -89,6 +89,18 @@ owns only a lightweight cockpit checkpoint.
 - If the local browser checkpoint is missing, use the Sessions panel to resume a
   Hermes session from the profile store.
 
+## Optimization Pass
+
+The latest public snapshot includes a state and personalization optimization
+pass. The short version: large audit payloads are no longer treated as normal
+context, opportunity prompts now carry compact career context instead of whole
+dashboard state, learning patterns have a fixed taxonomy with merge-on-write,
+and role-family retrieval now boosts relevant proof without starving adjacent
+evidence.
+
+The detailed public write-up is in
+[docs/OPTIMIZATION_PASS.md](docs/OPTIMIZATION_PASS.md).
+
 ## Generated Materials
 
 Generated application materials are app-owned rows in SQLite with optional local
@@ -191,6 +203,7 @@ as a live schema.
 - `config/jobapps.example.yaml`: human-readable example settings.
 - `docs/ARCHITECTURE_RESEARCH.md`: research-backed architecture notes.
 - `docs/BRANDING.md`: Hermes-native JobApps visual and naming guidance.
+- `docs/OPTIMIZATION_PASS.md`: public-safe notes on the state and personalization optimization pass.
 - `design-system/`: extracted Hermes visual tokens and component references.
 - `Privacy.md`: privacy and repo-boundary rules.
 - `tests/`: standard-library tests for the workflow engine and database.
@@ -203,4 +216,4 @@ Keep `docs/` public-safe. Local-only secrets, private profile notes, generated
 materials, and machine-specific runtime data belong in ignored config/profile
 files, not in repo documentation.
 
-See [Privacy.md](/Users/prashantshah/Desktop/Prashant/Prashant%20Gallery/Code/hermes-jobapps/Privacy.md).
+See [Privacy.md](Privacy.md).

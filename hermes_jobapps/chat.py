@@ -107,7 +107,7 @@ class ChatOrchestrator:
 
         result = self.hermes.chat(
             message,
-            instructions=build_chat_instructions(self.repo.dashboard(), self.toolbox.specs()),
+            instructions=build_chat_instructions(self.repo.instruction_summary(), self.toolbox.specs()),
             conversation=conversation,
             conversation_history=conversation_history,
             session_key=self.session_key,
@@ -200,7 +200,7 @@ class ChatOrchestrator:
         final_result: dict[str, Any] = {"action": "hermes_chat"}
         for raw in self.hermes.stream_chat(
             message,
-            instructions=build_chat_instructions(self.repo.dashboard(), self.toolbox.specs()),
+            instructions=build_chat_instructions(self.repo.instruction_summary(), self.toolbox.specs()),
             conversation=conversation,
             conversation_history=conversation_history,
             session_key=self.session_key,

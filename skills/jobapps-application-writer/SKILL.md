@@ -1,6 +1,6 @@
 ---
 name: jobapps-application-writer
-description: Use when drafting or tailoring Prashant's resume notes, cover letters, and application answers.
+description: Use when drafting or tailoring applicant resume notes, cover letters, and application answers.
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -14,7 +14,7 @@ metadata:
 
 ## Purpose
 
-Generate application materials that sound like Prashant and stay grounded in truth. The goal is not generic polish. The goal is shipped applications with the right angle for the role.
+Generate application materials that sound like the applicant and stay grounded in truth. The goal is not generic polish. The goal is shipped applications with the right angle for the role.
 
 ## Required Context
 
@@ -33,7 +33,7 @@ Read JobApps database context first. It should contain:
 
 Use JobApps database facts, proof points, learning patterns, and app-owned materials as runtime context. Do not browse or reuse old Downloads resumes, cover letters, CVs, `knowledge_base.html`, LinkedIn exports, website copy, or generated variants as live material sources.
 
-If writing in Prashant's voice outside this project, also load the `prashant-voice` skill.
+If writing for a specific person outside this project, also load the relevant private voice skill.
 
 Use native Hermes file/search/patch/terminal tools to author, edit, compile, and QA candidate-facing artifacts. Use JobApps tools to retrieve eligible evidence before writing and to link finished materials/provenance after the artifact is good. Do not use JobApps authoring, patch, diff, or compile helpers for ordinary material work.
 
@@ -44,16 +44,16 @@ Use native Hermes file/search/patch/terminal tools to author, edit, compile, and
 - Tailor by choosing the right slice of real work, not inventing work.
 - Start from `tailoring_requirements`; each meaningful change should answer a JD need.
 - Apply `learning_patterns` before choosing phrasing or emphasis.
-- Record the framing choice as a `portrayal_decision` when it changes how Prashant is presented.
+- Record the framing choice as a `portrayal_decision` when it changes how the applicant is presented.
 - Use role-family ordering from database/config.
 - Use numbers only when they are load-bearing.
 - Project header tags should be few and high-signal.
 - Drop padding tools and broad skill inventories.
 - Save final resume builds as standard `kind="resume"` Typst (`.typ`) or PDF materials using `jobapps_save_material` after the candidate-facing artifact exists. Use `kind="resume_tailoring"` only for notes/change plans; do not invent final-resume kinds.
 - Link materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not turn JobApps into the drafting workbench.
-- Rotate sections by role. Data Engineer and Software Engineer are the primary defaults. Backend, SWE, data/ML-adjacent, research assistant, IT/help desk, internship, and contract versions are acceptable when they help Prashant survive and move forward.
+- Rotate sections by role. Keep the strongest role-relevant proof points and remove padding.
 - Prefer current, user-confirmed proof signals from JobApps database records. Confirm details before making them stronger than the source supports.
-- For a base resume update, remove stale "Expected" degree wording and use user-confirmed graduation and GPA wording. Do not reuse stale values from old resumes, CVs, or `knowledge_base.html`.
+- For a base resume update, remove stale graduation wording and use user-confirmed education/GPA wording only when the applicant explicitly wants it included. Do not reuse stale values from old resumes, CVs, or `knowledge_base.html`.
 - Treat new impact claims from the CV/knowledge base, such as funding, media, number of pantries, user counts, or exact performance effects, as candidate proof until confirmed or supported by a reliable source.
 
 ## Cover Letter Rules
@@ -77,7 +77,7 @@ Use native Hermes file/search/patch/terminal tools to author, edit, compile, and
 - Use one concrete proof point.
 - Avoid resume-regurgitation.
 - Prefer mechanism over adjective.
-- If the answer asks for motivation, explain the problem that pulls Prashant in.
+- If the answer asks for motivation, explain the problem that pulls the applicant in.
 
 ## Voice Rules
 

@@ -30,6 +30,9 @@ config/jobapps.local.*
 .env
 .env.*
 
+# Local handoff/audit notes
+docs/TIGHTEN-*.md
+
 # Keep project plugin code publishable while ignoring local Hermes state.
 .hermes/*
 !.hermes/plugins/

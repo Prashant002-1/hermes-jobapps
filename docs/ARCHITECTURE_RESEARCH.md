@@ -56,7 +56,7 @@ The first implementation is a dependency-free Python local server:
 - `.hermes/plugins/jobapps/` exposes the same app tools and context to native Hermes.
 - `web/` exposes the cockpit and Hermes chat.
 
-This is not an LLM replacement. It gives Hermes a durable state/tool contract and gives Prashant a useful cockpit.
+This is not an LLM replacement. It gives Hermes a durable state/tool contract and gives the applicant a useful cockpit.
 
 The personal memory layer also stays inside this implementation. JobApps now uses `brain_entities` and `brain_events` in SQLite for the human trail: conversations, corrections, constraints, preferences, people, companies, decisions, networking history, and why materials changed. This borrows the useful personal-brain pattern of canonical entities plus an event timeline, without adding an MCP server, GBrain dependency, or separate markdown wiki runtime.
 
