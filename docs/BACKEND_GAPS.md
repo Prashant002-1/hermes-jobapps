@@ -140,10 +140,10 @@ The cockpit now treats materials as first-class state:
   - `jobapps_patch_material` — exact replacement patch, file update, revision diff, provenance record when JobApps material-revision semantics are required.
   - `jobapps_diff_material` — preview diff without mutation when operating on a stored material record.
   - `jobapps_compile_material_pdf` — compiles Typst or TeX to PDF using configured compiler search paths and common macOS locations (`/opt/homebrew/bin`, `/usr/local/bin`, `/Library/TeX/texbin`); reports `missing_compiler` without installing anything when unavailable.
-  - `jobapps_mark_material_ready_for_review` — marks materials ready for human review without creating a dashboard Action.
+  - `jobapps_mark_material_ready_for_review` — requires source-bound semantic review and required Typst layout QA before marking materials ready; creates no dashboard Action.
 - Frontend renders a **Materials** card with artifact metadata, revisions, latest diff, compile status, and a `Compile PDF` action.
 
-**Compiler status:** `typst` 0.14.2 is installed at `/opt/homebrew/bin/typst`; smoke tests compile generated resume Typst artifacts to PDF through the app API. `tectonic` remains supported for TeX cover-letter and legacy artifacts. The code still returns `missing_compiler` cleanly on machines without the requested compiler.
+**Compiler status:** Typst and Tectonic are optional local tools. JobApps resolves them from `PATH` and configured/common compiler directories, and returns `missing_compiler` cleanly when a requested compiler is unavailable.
 
 ---
 

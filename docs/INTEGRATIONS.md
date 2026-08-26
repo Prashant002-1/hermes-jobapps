@@ -86,7 +86,7 @@ That command must be authenticated locally. If `gog` is unavailable or not authe
 
 ## LaTeX And PDFs
 
-Generated materials are saved as TeX. PDF compilation is optional. The app checks configured compiler paths and tries supported compilers in order:
+Resume materials are saved as Typst; cover letters may use Typst or TeX. PDF compilation is optional. The app checks configured compiler paths and tries supported compilers in order:
 
 - `tectonic`
 - `latexmk`

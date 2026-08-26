@@ -14,6 +14,7 @@ data/
 private/
 exports/
 materials/
+work/
 *.db
 *.sqlite
 *.sqlite3

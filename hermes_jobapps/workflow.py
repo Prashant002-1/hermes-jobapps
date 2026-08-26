@@ -18,7 +18,7 @@ class JobAppsWorkflow:
         run = self.repo.create_agent_run("Prepare opportunity for Hermes research, tailoring, and tracking.")
         run_id = run["id"]
         try:
-            context = self.repo.career_context(use="resume")
+            context = {"profile_facts": self.repo.list_candidate_facts()}
             evaluation = self.toolbox.execute(
                 "jobapps_evaluate_job",
                 {"job": job, "context": context},
@@ -33,7 +33,18 @@ class JobAppsWorkflow:
             self.repo.record_evaluation_signals(job_id, evaluation)
             self._record_tailoring_state(job_id, evaluation)
             self.repo.update_agent_run(run_id, job_id=job_id)
-            prompt = build_opportunity_prompt(record["job"], context, evaluation)
+            retrieval = self.repo.retrieve_for_job(job_id, use="resume", limit=12)
+            material_context = {
+                "profile_facts": retrieval.get("profile_facts", []),
+                "proof_points": [item["source"] for item in retrieval.get("evidence", [])],
+                "learning_patterns": retrieval.get("learning_patterns", []),
+                "context_policy": {
+                    "evidence": "job_relevant_active_verified_packet",
+                    "learning_patterns": "current_exact_use_policy",
+                    "historical_brain_events": "excluded",
+                },
+            }
+            prompt = build_opportunity_prompt(record["job"], material_context, evaluation)
             prompt_record = self.toolbox.execute(
                 "jobapps_save_prompt",
                 {

@@ -8,11 +8,11 @@ Hermes JobApps is a career operating system, not a spray-and-pray job bot.
 
 The core experience is a cockpit:
 
-- **Inbox**: job links/descriptions the applicant is considering.
+- **Inbox**: job links/descriptions the user is considering.
 - **Blocker Preflight**: sponsorship/work authorization, seniority, location, risks, effort. No fit scoring.
 - **Research**: company context, sponsorship signal, product/team context, and networking targets.
 - **Tailoring**: JD requirements, matched proof points, gaps requiring user story, and portrayal decisions.
-- **Materials**: `.tex` resume builds, `.tex` cover-letter builds, short answers, and outreach.
+- **Materials**: `.typ` resume builds, Typst/TeX cover-letter builds, short answers, and outreach.
 - **Approvals**: submit/send/follow-up decisions.
 - **Management**: progress items, contacts, follow-ups, changes, learning patterns, and application history.
 
@@ -23,7 +23,7 @@ The interface should make the next action obvious. The agent should be visible: 
 1. **Hermes front and center**
    - Hermes is the primary reasoning/session/memory engine.
    - The app is a cockpit and database owner.
-   - Native Hermes should be aware of JobApps through the project plugin or future MCP bridge.
+   - Native Hermes should be aware of JobApps through the project plugin; other agents should use CLI or HTTP/API wrappers around the same domain operations.
 
 2. **Transparent intelligence**
    - Show why Hermes made a recommendation.
@@ -36,7 +36,7 @@ The interface should make the next action obvious. The agent should be visible: 
 
 4. **Personalizable system**
    - Use editable config and tool-updatable records for scoring weights, sponsorship rules, sources, templates, banned phrases, company notes, and profile facts.
-   - Let the applicant correct the system once and have that correction matter later.
+   - Let the user correct the system once and have that correction matter later.
 
 5. **One good workflow first**
    - Start with pasted links/descriptions.
@@ -90,7 +90,7 @@ Hermes docs and repo show the integration path:
 - Project context files and skills are first-class prompt inputs; plugin `pre_llm_call` context is ephemeral and appended to the current user turn.
 - Session storage is Hermes-owned SQLite state. JobApps should store its own app state separately and correlate via Hermes session/run IDs.
 - Provider runtime resolution belongs to Hermes. JobApps should not decide the underlying LLM provider.
-- Plugin tools are the right first bridge for native Hermes. MCP is the likely bridge if JobApps becomes a separate service.
+- Plugin tools are the right bridge for native Hermes. Prefer a small documented HTTP or CLI adapter if JobApps needs another agent integration.
 
 ## Configuration Philosophy
 
@@ -121,7 +121,7 @@ Use four layers:
 1. **App database**: durable structured truth for jobs, contacts, applications, materials, dates, statuses, prompts, research notes, progress, approvals, profile facts, proof points, application signals, tailoring requirements, portrayal decisions, and learning patterns.
 2. **Private imports**: optional local seed files used to populate the app database. Their format is not stable and must not define runtime behavior.
 3. **Hermes memory/profile**: durable preferences, lessons, high-level career direction, and session continuity. Do not store every application event here.
-4. **Generated artifacts**: `.tex` materials and exports under ignored runtime directories, with database records pointing to them.
+4. **Generated artifacts**: `.typ`/`.tex` materials and exports under ignored runtime directories, with database records pointing to them.
 
 Add one app-owned human layer inside the database:
 

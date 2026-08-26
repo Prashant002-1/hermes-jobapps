@@ -1,20 +1,22 @@
 ---
 name: jobapps-application-writer
-description: Use when drafting or tailoring applicant resume notes, cover letters, and application answers.
+description: Use when drafting or tailoring the user's resume notes, cover letters, and application answers.
 version: 1.0.0
 author: Hermes Agent
 license: MIT
 metadata:
   hermes:
     tags: [job-search, resume, cover-letter, writing]
-    related_skills: [jobapps-role-evaluator, prashant-voice]
+    related_skills: [jobapps-role-evaluator, jobapps-material-quality-judge]
 ---
 
 # JobApps Application Writer
 
 ## Purpose
 
-Generate application materials that sound like the applicant and stay grounded in truth. The goal is not generic polish. The goal is shipped applications with the right angle for the role.
+Generate application materials that sound like the user and stay grounded in truth. The goal is not generic polish. The goal is shipped applications with the right angle and real substance for the role.
+
+Load `jobapps-material-quality-judge` for substantive resumes, cover letters, short answers, and important outreach. Passing compile/format QA is not enough: reject polished-but-hollow output, JD regurgitation, spec-sheet bullets, sparse Experience sections, and generic AI prose before saving materials as ready.
 
 ## Required Context
 
@@ -33,7 +35,7 @@ Read JobApps database context first. It should contain:
 
 Use JobApps database facts, proof points, learning patterns, and app-owned materials as runtime context. Do not browse or reuse old Downloads resumes, cover letters, CVs, `knowledge_base.html`, LinkedIn exports, website copy, or generated variants as live material sources.
 
-If writing for a specific person outside this project, also load the relevant private voice skill.
+If writing for a specific person outside this project, load the relevant private voice guidance.
 
 Use native Hermes file/search/patch/terminal tools to author, edit, compile, and QA candidate-facing artifacts. Use JobApps tools to retrieve eligible evidence before writing and to link finished materials/provenance after the artifact is good. Do not use JobApps authoring, patch, diff, or compile helpers for ordinary material work.
 
@@ -44,11 +46,13 @@ Use native Hermes file/search/patch/terminal tools to author, edit, compile, and
 - Tailor by choosing the right slice of real work, not inventing work.
 - Start from `tailoring_requirements`; each meaningful change should answer a JD need.
 - Apply `learning_patterns` before choosing phrasing or emphasis.
-- Record the framing choice as a `portrayal_decision` when it changes how the applicant is presented.
+- Record the framing choice as a `portrayal_decision` when it changes how the user is presented.
 - Use role-family ordering from database/config.
 - Use numbers only when they are load-bearing.
 - Project header tags should be few and high-signal.
 - Drop padding tools and broad skill inventories.
+- Do not write toward a fixed word-count band. Use word count only as a diagnostic; semantic quality and rendered one-page geometry govern readiness.
+- Each major experience/project bullet should carry mechanism and meaning: what changed, how it worked, and why a reviewer should care.
 - Save final resume builds as standard `kind="resume"` Typst (`.typ`) or PDF materials using `jobapps_save_material` after the candidate-facing artifact exists. Use `kind="resume_tailoring"` only for notes/change plans; do not invent final-resume kinds.
 - Link materials through JobApps tools so the app owns provenance, job-specific folders, and professional filenames. Do not turn JobApps into the drafting workbench.
 - Rotate sections by role. Keep the strongest role-relevant proof points and remove padding.
@@ -66,6 +70,8 @@ Use native Hermes file/search/patch/terminal tools to author, edit, compile, and
 - Open with a real idea about the problem space, not generic enthusiasm.
 - Anchor the letter in one engineering story.
 - Connect to the company specifically.
+- Create a real through-line: company operating problem, the user's point of view, and 2-3 proof anchors.
+- If the thesis, personal discovery, or company-specific operating problem is missing, pause and ask the user a targeted question. Do not fall back to generic prose.
 - Close directly. No corporate filler.
 - Save cover-letter builds as LaTeX.
 - Let JobApps assign the visible filename when the material is saved or compiled.
@@ -77,7 +83,7 @@ Use native Hermes file/search/patch/terminal tools to author, edit, compile, and
 - Use one concrete proof point.
 - Avoid resume-regurgitation.
 - Prefer mechanism over adjective.
-- If the answer asks for motivation, explain the problem that pulls the applicant in.
+- If the answer asks for motivation, explain the problem that pulls the user in.
 
 ## Voice Rules
 
@@ -112,11 +118,12 @@ Avoid:
 4. Apply relevant learning patterns.
 5. Draft only the requested material.
 6. Run a voice pass.
-7. Run a truth pass.
-8. Record which requirement drove each meaningful material change.
-9. Record portrayal decisions for material framing.
-10. Surface any uncertainty instead of hiding it.
-11. If a stronger claim needs a project that does not exist yet, call it a build-now differentiator with the exact artifact and deadline. Do not claim it as done.
+7. Run the `jobapps-material-quality-judge` pass.
+8. Run a truth pass.
+9. Record which requirement drove each meaningful material change.
+10. Record portrayal decisions for material framing.
+11. Surface any uncertainty instead of hiding it.
+12. If a stronger claim needs a project that does not exist yet, call it a build-now differentiator with the exact artifact and deadline. Do not claim it as done.
 
 ## Output Style
 
@@ -139,6 +146,7 @@ Keep the explanation short. The draft is the artifact.
 - [ ] No banned phrasing.
 - [ ] No em dashes.
 - [ ] The draft maps to the job's actual tailoring requirements.
+- [ ] The content passes the material-quality judge: no JD mirror, no resume narration, no sparse/spec-sheet bullets, no polished-but-hollow cover letter.
 - [ ] Resume builds are Typst (`.typ`) and cover-letter builds are TeX (`.tex`) when saved as app materials.
 - [ ] Material changes have reasons, tailoring requirements, portrayal decisions, and proof points.
 - [ ] The writing sounds like a thoughtful engineer, not a resume generator.

@@ -25,6 +25,12 @@ ACTIVE_HERMES_RUN_SQL = "('queued','starting','running','requires_action','in_pr
 MATERIAL_REVIEW_APPROVAL_ACTIONS = {"review_application_materials", "review_generated_materials"}
 NON_ACTION_APPROVAL_ACTIONS = MATERIAL_REVIEW_APPROVAL_ACTIONS | {"review_outreach_draft"}
 MATERIAL_REVIEW_PROGRESS_TITLE = "Review generated resume and cover letter"
+MATERIAL_SEMANTIC_CHECKS = (
+    "truth",
+    "role_relevance",
+    "evidence_quality",
+    "voice_and_no_scaffolding",
+)
 PURPOSEFUL_ACTION_TERMS = ("send", "email", "message", "follow up", "follow-up", "follow_up", "contact")
 REVIEW_PROGRESS_KINDS = {"material_review"}
 REVIEW_PROGRESS_TERMS = ("review", "approve", "approval", "check")
@@ -100,23 +106,71 @@ def canonical_pattern_type(value: str | None) -> str:
     return "workflow"
 
 
-def _pattern_word_set(*texts: str) -> set[str]:
-    words = set()
-    for text in texts:
-        words.update(re.findall(r"[a-z0-9]+", (text or "").lower()))
-    return words
+LEARNING_PATTERN_STATUSES = {"active", "retired", "superseded"}
+
+# Small, closed policy registry. Scope and taxonomy are code-owned so callers
+# cannot create near-duplicate topics or decide retrieval behavior.
+LEARNING_POLICY_SPECS: dict[str, dict[str, Any]] = {
+    "candidate.truth": {
+        "pattern_type": "truth_boundary",
+        "uses": ("resume", "cover_letter", "outreach", "interview"),
+    },
+    "candidate.voice": {
+        "pattern_type": "voice",
+        "uses": ("resume", "cover_letter", "outreach", "interview"),
+    },
+    "resume.layout": {"pattern_type": "materials_format", "uses": ("resume",)},
+    "resume.summary": {"pattern_type": "positioning", "uses": ("resume",)},
+    "resume.evidence_selection": {"pattern_type": "materials_content", "uses": ("resume",)},
+    "resume.bullets": {"pattern_type": "materials_quality", "uses": ("resume",)},
+    "cover_letter.substance": {
+        "pattern_type": "materials_quality",
+        "uses": ("cover_letter",),
+    },
+    "outreach.first_contact": {"pattern_type": "outreach", "uses": ("outreach",)},
+    "workflow.operations": {"pattern_type": "workflow", "uses": ("workflow",)},
+}
+LEARNING_POLICY_USES = {use for spec in LEARNING_POLICY_SPECS.values() for use in spec["uses"]}
+
+# Profile facts contain both candidate truth and cockpit operating notes. Only
+# these fixed fact categories may enter candidate-material context. Workflow,
+# tracking, networking, writing, and architecture notes stay queryable history.
+CANDIDATE_FACT_CATEGORIES = {
+    "academic_background",
+    "education",
+    "experience",
+    "honors_awards",
+    "jobapps_materials_candidate_fact",
+    "materials_boundary",
+    "portfolio_project",
+    "project",
+    "skills",
+}
 
 
-def pattern_similarity(a_trigger: str, a_preference: str, b_trigger: str, b_preference: str) -> float:
-    """Jaccard similarity over the combined trigger+preference word sets."""
-    a = _pattern_word_set(a_trigger, a_preference)
-    b = _pattern_word_set(b_trigger, b_preference)
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
+def normalize_learning_pattern_status(value: str | None) -> str:
+    status = str(value or "active").strip().lower()
+    if status not in LEARNING_PATTERN_STATUSES:
+        raise ValueError(f"Unsupported learning pattern status: {value}")
+    return status
 
 
-LEARNING_PATTERN_MERGE_THRESHOLD = 0.55
+def learning_pattern_rule_key(metadata: dict[str, Any] | None) -> str:
+    return str((metadata or {}).get("rule_key") or "").strip().lower()
+
+
+def learning_policy_spec(rule_key: str) -> dict[str, Any]:
+    key = str(rule_key or "").strip().lower()
+    spec = LEARNING_POLICY_SPECS.get(key)
+    if spec is None:
+        raise ValueError(f"Unsupported learning policy key: {rule_key}")
+    return {"rule_key": key, **spec}
+
+
+def learning_pattern_uses(metadata: dict[str, Any] | None) -> set[str]:
+    rule_key = learning_pattern_rule_key(metadata)
+    spec = LEARNING_POLICY_SPECS.get(rule_key)
+    return set(spec["uses"]) if spec else set()
 
 
 class JobRepository:
@@ -542,6 +596,8 @@ class JobRepository:
                     source TEXT NOT NULL DEFAULT 'agent',
                     confidence REAL NOT NULL DEFAULT 0.8,
                     usage_count INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    superseded_by TEXT,
                     metadata TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -549,6 +605,11 @@ class JobRepository:
 
                 CREATE INDEX IF NOT EXISTS idx_learning_patterns_type
                 ON learning_patterns(pattern_type, updated_at);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_patterns_active_rule_key
+                ON learning_patterns(json_extract(metadata, '$.rule_key'))
+                WHERE status = 'active'
+                  AND COALESCE(json_extract(metadata, '$.rule_key'), '') <> '';
 
                 CREATE TABLE IF NOT EXISTS contacts (
                     id TEXT PRIMARY KEY,
@@ -564,6 +625,9 @@ class JobRepository:
                     channel TEXT,
                     relationship TEXT,
                     notes TEXT,
+                    is_tracked INTEGER NOT NULL DEFAULT 0,
+                    why_added TEXT NOT NULL DEFAULT '',
+                    network_status TEXT NOT NULL DEFAULT 'to_contact',
                     raw_payload TEXT NOT NULL DEFAULT '{}',
                     last_seen_at TEXT,
                     created_at TEXT NOT NULL,
@@ -652,6 +716,23 @@ class JobRepository:
             self._ensure_retrieval_index(conn)
             self._ensure_brain_index(conn)
             self._backfill_retrieval_chunks(conn)
+            self._reclassify_unattested_material_readiness(conn)
+
+    def _reclassify_unattested_material_readiness(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            UPDATE materials
+            SET metadata = json_set(
+                    metadata,
+                    '$.legacy_review_status',
+                    'ready_for_review',
+                    '$.review_status',
+                    'needs_semantic_review'
+                )
+            WHERE json_extract(metadata, '$.review_status') = 'ready_for_review'
+              AND COALESCE(json_extract(metadata, '$.semantic_review.status'), '') <> 'passed'
+            """
+        )
 
     def _ensure_columns(self, conn: sqlite3.Connection) -> None:
         self._add_columns(
@@ -708,6 +789,14 @@ class JobRepository:
         )
         self._add_columns(
             conn,
+            "learning_patterns",
+            {
+                "status": "TEXT NOT NULL DEFAULT 'active'",
+                "superseded_by": "TEXT",
+            },
+        )
+        self._add_columns(
+            conn,
             "contacts",
             {
                 "email": "TEXT",
@@ -718,6 +807,9 @@ class JobRepository:
                 "source_confidence": "REAL NOT NULL DEFAULT 0.5",
                 "raw_payload": "TEXT NOT NULL DEFAULT '{}'",
                 "last_seen_at": "TEXT",
+                "is_tracked": "INTEGER NOT NULL DEFAULT 0",
+                "why_added": "TEXT NOT NULL DEFAULT ''",
+                "network_status": "TEXT NOT NULL DEFAULT 'to_contact'",
             },
         )
 
@@ -725,6 +817,7 @@ class JobRepository:
     def _ensure_contact_indexes(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_company ON contacts(company, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_source_url ON contacts(source_url)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_contacts_tracked ON contacts(is_tracked, updated_at)")
 
     @staticmethod
     def _ensure_performance_indexes(conn: sqlite3.Connection) -> None:
@@ -945,6 +1038,9 @@ class JobRepository:
         clean_format = normalize_material_format_for_db(format)
         clean_kind = normalize_material_kind_for_db(kind, format=clean_format, file_path=file_path, content=content)
         clean_metadata = dict(metadata or {})
+        if clean_metadata.get("review_status") == "ready_for_review" or clean_metadata.get("semantic_review"):
+            clean_metadata["review_status"] = "needs_semantic_review"
+            clean_metadata.pop("semantic_review", None)
         content_metadata = material_payload_metadata(content)
         for key in ("pdf_path", "source_path", "source_format", "template", "display_name", "filename", "name"):
             if content_metadata.get(key) and not clean_metadata.get(key):
@@ -1037,8 +1133,24 @@ class JobRepository:
             if current is None:
                 raise KeyError(material_id)
             merged_metadata = json.loads(current["metadata"] or "{}")
+            if content is not None or file_path is not None:
+                merged_metadata.update(
+                    {
+                        "review_status": "draft",
+                        "compile": {},
+                        "verification": {},
+                        "layout_qa": {},
+                    }
+                )
+                merged_metadata.pop("semantic_review", None)
             if metadata:
                 merged_metadata.update(metadata)
+            if metadata and (
+                metadata.get("review_status") == "ready_for_review"
+                or metadata.get("semantic_review")
+            ):
+                merged_metadata["review_status"] = "needs_semantic_review"
+                merged_metadata.pop("semantic_review", None)
             conn.execute(
                 """
                 UPDATE materials
@@ -1050,6 +1162,50 @@ class JobRepository:
                 WHERE id = ?
                 """,
                 (content, file_path, rationale, json.dumps(merged_metadata), now, material_id),
+            )
+            row = conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
+        if row is None:
+            raise KeyError(material_id)
+        return decode_material(row)
+
+    def mark_material_ready_for_review(
+        self,
+        material_id: str,
+        *,
+        reviewer: str,
+        checks: dict[str, Any],
+        source_sha256: str,
+    ) -> dict[str, Any]:
+        material = self.get_material(material_id)
+        clean_reviewer = str(reviewer or "").strip()
+        if not clean_reviewer:
+            raise ValueError("semantic reviewer is required")
+        failed = [name for name in MATERIAL_SEMANTIC_CHECKS if checks.get(name) is not True]
+        if failed:
+            raise ValueError(f"semantic checks failed: {', '.join(failed)}")
+        current_hash = material_source_sha256(material)
+        if not current_hash or source_sha256 != current_hash:
+            raise ValueError("semantic review source hash does not match the current material")
+        now = utc_now()
+        with self._connect() as conn:
+            current = conn.execute("SELECT metadata FROM materials WHERE id = ?", (material_id,)).fetchone()
+            if current is None:
+                raise KeyError(material_id)
+            metadata = json.loads(current["metadata"] or "{}")
+            metadata.update(
+                {
+                    "review_status": "ready_for_review",
+                    "semantic_review": {
+                        "status": "passed",
+                        "reviewer": clean_reviewer,
+                        "checks": {name: True for name in MATERIAL_SEMANTIC_CHECKS},
+                        "source_sha256": current_hash,
+                    },
+                }
+            )
+            conn.execute(
+                "UPDATE materials SET metadata = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(metadata), now, material_id),
             )
             row = conn.execute("SELECT * FROM materials WHERE id = ?", (material_id,)).fetchone()
         if row is None:
@@ -1494,57 +1650,124 @@ class JobRepository:
     ) -> dict[str, Any]:
         now = utc_now()
         pattern_type = canonical_pattern_type(pattern_type)
+        pattern_metadata = dict(metadata or {})
+        rule_key = learning_pattern_rule_key(pattern_metadata)
+        if rule_key:
+            spec = learning_policy_spec(rule_key)
+            rule_key = spec["rule_key"]
+            pattern_type = spec["pattern_type"]
+            pattern_metadata = {"rule_key": rule_key, "uses": list(spec["uses"])}
+        uses = learning_pattern_uses(pattern_metadata)
         with self._connect() as conn:
-            # Merge instead of accumulate: if an existing pattern of the same
-            # canonical type says nearly the same thing, update it in place so
-            # the pattern library stays small enough to inject whole.
-            existing_rows = conn.execute(
-                "SELECT * FROM learning_patterns WHERE pattern_type = ?",
-                (pattern_type,),
-            ).fetchall()
-            merge_target = None
-            best_similarity = 0.0
-            for row in existing_rows:
-                similarity = pattern_similarity(
-                    row["trigger"], row["preference"], trigger, preference
-                )
-                if similarity >= LEARNING_PATTERN_MERGE_THRESHOLD and similarity > best_similarity:
-                    merge_target = row
-                    best_similarity = similarity
-            if merge_target is not None:
-                merged_metadata = json.loads(merge_target["metadata"] or "{}")
-                merged_metadata.update(metadata or {})
-                merged_metadata["merged_updates"] = int(merged_metadata.get("merged_updates", 0)) + 1
+            # Canonical policy writes are keyed, scoped, and versioned. A newer
+            # write for the same key becomes the sole active version while the
+            # replaced row remains available for audit.
+            if rule_key and uses:
+                active_rows = conn.execute(
+                    """
+                    SELECT * FROM learning_patterns
+                    WHERE status = 'active'
+                      AND (superseded_by IS NULL OR superseded_by = '')
+                    """
+                ).fetchall()
+                same_key = [
+                    row
+                    for row in active_rows
+                    if learning_pattern_rule_key(json.loads(row["metadata"] or "{}")) == rule_key
+                ]
+                for row in same_key:
+                    row_metadata = json.loads(row["metadata"] or "{}")
+                    if (
+                        row["pattern_type"] == pattern_type
+                        and row["trigger"] == trigger
+                        and row["preference"] == preference
+                        and learning_pattern_uses(row_metadata) == uses
+                    ):
+                        row_metadata.update(pattern_metadata)
+                        row_metadata["merged_updates"] = int(row_metadata.get("merged_updates", 0)) + 1
+                        conn.execute(
+                            """
+                            UPDATE learning_patterns
+                            SET source = ?, confidence = ?, metadata = ?, updated_at = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                source or "agent",
+                                max(float(confidence), float(row["confidence"] or 0.0)),
+                                json.dumps(row_metadata),
+                                now,
+                                row["id"],
+                            ),
+                        )
+                        updated = conn.execute(
+                            "SELECT * FROM learning_patterns WHERE id = ?", (row["id"],)
+                        ).fetchone()
+                        return decode_learning_pattern(updated) | {"merged": True, "rule_key": rule_key}
+
+                pattern_id = uuid.uuid4().hex[:12]
+                if same_key:
+                    conn.executemany(
+                        """
+                        UPDATE learning_patterns
+                        SET status = 'superseded', superseded_by = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        [(pattern_id, now, row["id"]) for row in same_key],
+                    )
                 conn.execute(
                     """
-                    UPDATE learning_patterns
-                    SET trigger = ?, preference = ?, source = ?, confidence = ?,
-                        metadata = ?, updated_at = ?
-                    WHERE id = ?
+                    INSERT INTO learning_patterns (
+                        id, pattern_type, trigger, preference, source, confidence,
+                        status, superseded_by, metadata, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?)
                     """,
                     (
+                        pattern_id,
+                        pattern_type,
                         trigger,
                         preference,
                         source or "agent",
-                        max(float(confidence), float(merge_target["confidence"] or 0.0)),
-                        json.dumps(merged_metadata),
+                        float(confidence),
+                        json.dumps(pattern_metadata),
                         now,
-                        merge_target["id"],
+                        now,
                     ),
                 )
+                self._record_brain_event_conn(
+                    conn,
+                    event_type="learning_pattern",
+                    title=pattern_type,
+                    content=preference,
+                    entity_type="job_search",
+                    entity_title=trigger,
+                    source=source or "agent",
+                    evidence_text=trigger,
+                    confidence=confidence,
+                    importance=0.86,
+                    occurred_at=now,
+                    metadata={
+                        "learning_pattern_id": pattern_id,
+                        "rule_key": rule_key,
+                        "uses": sorted(uses),
+                        "superseded_ids": [row["id"] for row in same_key],
+                    },
+                )
                 row = conn.execute(
-                    "SELECT * FROM learning_patterns WHERE id = ?", (merge_target["id"],)
+                    "SELECT * FROM learning_patterns WHERE id = ?", (pattern_id,)
                 ).fetchone()
-                return decode_learning_pattern(row) | {"merged": True, "similarity": round(best_similarity, 3)}
+                return decode_learning_pattern(row)
 
+            # Unkeyed rows are preserved only as legacy history. They never
+            # participate in policy retrieval or supersession.
             pattern_id = uuid.uuid4().hex[:12]
             conn.execute(
                 """
                 INSERT INTO learning_patterns (
                     id, pattern_type, trigger, preference, source, confidence,
-                    metadata, created_at, updated_at
+                    status, superseded_by, metadata, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?, ?)
                 """,
                 (
                     pattern_id,
@@ -1575,33 +1798,194 @@ class JobRepository:
             row = conn.execute("SELECT * FROM learning_patterns WHERE id = ?", (pattern_id,)).fetchone()
         return decode_learning_pattern(row)
 
+    def get_learning_pattern(self, pattern_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM learning_patterns WHERE id = ?", (pattern_id,)).fetchone()
+        if row is None:
+            raise KeyError(pattern_id)
+        return decode_learning_pattern(row)
+
+    def update_learning_pattern(
+        self,
+        pattern_id: str,
+        *,
+        status: str,
+        superseded_by: str | None = None,
+        pattern_type: str | None = None,
+        trigger: str | None = None,
+        preference: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        next_status = normalize_learning_pattern_status(status)
+        if superseded_by == pattern_id:
+            raise ValueError("A learning pattern cannot supersede itself.")
+        now = utc_now()
+        with self._connect() as conn:
+            current = conn.execute(
+                "SELECT * FROM learning_patterns WHERE id = ?", (pattern_id,)
+            ).fetchone()
+            if current is None:
+                raise KeyError(pattern_id)
+            if superseded_by:
+                replacement = conn.execute(
+                    "SELECT id FROM learning_patterns WHERE id = ?", (superseded_by,)
+                ).fetchone()
+                if replacement is None:
+                    raise KeyError(superseded_by)
+            next_superseded_by = superseded_by
+            if next_status == "active":
+                next_superseded_by = None
+            next_metadata = json.loads(current["metadata"] or "{}")
+            if metadata is not None:
+                next_metadata.update(metadata)
+            rule_key = learning_pattern_rule_key(next_metadata)
+            if rule_key:
+                spec = learning_policy_spec(rule_key)
+                rule_key = spec["rule_key"]
+                next_type = spec["pattern_type"]
+                next_metadata = {"rule_key": rule_key, "uses": list(spec["uses"])}
+            else:
+                next_type = canonical_pattern_type(pattern_type or current["pattern_type"])
+            next_trigger = trigger if trigger is not None else current["trigger"]
+            next_preference = preference if preference is not None else current["preference"]
+            uses = learning_pattern_uses(next_metadata)
+            superseded_ids: list[str] = []
+            if next_status == "active" and rule_key and uses:
+                active_rows = conn.execute(
+                    """
+                    SELECT * FROM learning_patterns
+                    WHERE id != ? AND status = 'active'
+                      AND (superseded_by IS NULL OR superseded_by = '')
+                    """,
+                    (pattern_id,),
+                ).fetchall()
+                superseded_ids = [
+                    row["id"]
+                    for row in active_rows
+                    if learning_pattern_rule_key(json.loads(row["metadata"] or "{}")) == rule_key
+                ]
+                if superseded_ids:
+                    conn.executemany(
+                        """
+                        UPDATE learning_patterns
+                        SET status = 'superseded', superseded_by = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        [(pattern_id, now, old_id) for old_id in superseded_ids],
+                    )
+            conn.execute(
+                """
+                UPDATE learning_patterns
+                SET pattern_type = ?, trigger = ?, preference = ?, status = ?,
+                    superseded_by = ?, metadata = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_type,
+                    next_trigger,
+                    next_preference,
+                    next_status,
+                    next_superseded_by,
+                    json.dumps(next_metadata),
+                    now,
+                    pattern_id,
+                ),
+            )
+            self._record_brain_event_conn(
+                conn,
+                event_type="learning_pattern_lifecycle_updated",
+                title=next_type,
+                content=reason or f"Learning pattern updated to {next_status}.",
+                entity_type="job_search",
+                entity_title=next_trigger,
+                source="agent",
+                confidence=0.95,
+                importance=0.8,
+                occurred_at=now,
+                metadata={
+                    "learning_pattern_id": pattern_id,
+                    "status": next_status,
+                    "superseded_by": next_superseded_by,
+                    "rule_key": rule_key,
+                    "uses": sorted(uses),
+                    "superseded_ids": superseded_ids,
+                },
+            )
+        return self.get_learning_pattern(pattern_id)
+
+    def update_learning_pattern_lifecycle(
+        self,
+        pattern_id: str,
+        *,
+        status: str,
+        superseded_by: str | None = None,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        return self.update_learning_pattern(
+            pattern_id,
+            status=status,
+            superseded_by=superseded_by,
+            reason=reason,
+        )
+
     def list_learning_patterns(
         self,
         pattern_type: str | None = None,
         *,
         limit: int = 120,
+        include_inactive: bool = False,
     ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if pattern_type:
+            clauses.append("pattern_type = ?")
+            params.append(canonical_pattern_type(pattern_type))
+        if not include_inactive:
+            clauses.append("status = 'active'")
+            clauses.append("(superseded_by IS NULL OR superseded_by = '')")
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(bounded_limit(limit, default=120, maximum=500))
         with self._connect() as conn:
-            if pattern_type:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM learning_patterns
-                    WHERE pattern_type = ?
-                    ORDER BY updated_at DESC, created_at DESC
-                    LIMIT ?
-                    """,
-                    (pattern_type, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT * FROM learning_patterns
-                    ORDER BY updated_at DESC, created_at DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
+            rows = conn.execute(
+                f"""
+                SELECT * FROM learning_patterns
+                {where}
+                ORDER BY confidence DESC, updated_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
         return [decode_learning_pattern(row) for row in rows]
+
+    def retrieve_learning_patterns(
+        self,
+        query: str,
+        *,
+        use: str = "resume",
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        del query  # Policy selection is exact by scope, never lexical.
+        normalized_use = str(use or "resume").strip().lower()
+        if normalized_use not in LEARNING_POLICY_USES:
+            raise ValueError(f"Unsupported learning pattern use: {use}")
+        result_limit = bounded_limit(limit, default=10, maximum=20)
+        selected: dict[str, dict[str, Any]] = {}
+        for pattern in self.list_learning_patterns(limit=500):
+            metadata = pattern.get("metadata") or {}
+            rule_key = learning_pattern_rule_key(metadata)
+            uses = learning_pattern_uses(metadata)
+            if not rule_key or normalized_use not in uses:
+                continue
+            if rule_key in selected:
+                raise ValueError(f"Multiple active learning policies share rule_key {rule_key!r}.")
+            selected[rule_key] = pattern
+        if len(selected) > result_limit:
+            raise ValueError(
+                f"{len(selected)} active {normalized_use} policies exceed the limit of {result_limit}; "
+                "retire or consolidate policies instead of ranking them."
+            )
+        return [selected[key] for key in sorted(selected)]
 
     def create_progress_item(
         self,
@@ -1827,6 +2211,7 @@ class JobRepository:
         self,
         name: str,
         *,
+        contact_id: str = "",
         company: str = "",
         role: str = "",
         email: str = "",
@@ -1838,6 +2223,9 @@ class JobRepository:
         channel: str = "",
         relationship: str = "",
         notes: str = "",
+        is_tracked: bool = False,
+        why_added: str = "",
+        network_status: str = "",
         raw_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         name = normalize_space_for_db(name)
@@ -1850,13 +2238,28 @@ class JobRepository:
         role = normalize_space_for_db(role)
         source_url = normalize_space_for_db(source_url)
         linkedin_url = normalize_space_for_db(linkedin_url)
+        requested_contact_id = normalize_space_for_db(contact_id)
         contact_id = uuid.uuid4().hex[:12]
+        why_added = str(why_added or "").strip()
+        incoming_network_status = normalize_person_status(network_status) if network_status else ""
         with self._connect() as conn:
             row = None
-            if email:
+            if requested_contact_id:
+                row = conn.execute("SELECT * FROM contacts WHERE id = ?", (requested_contact_id,)).fetchone()
+                if row is None:
+                    raise KeyError(requested_contact_id)
+            if row is None and email:
                 row = conn.execute("SELECT * FROM contacts WHERE lower(email) = ?", (email,)).fetchone()
+            if row is None and linkedin_url:
+                row = conn.execute(
+                    "SELECT * FROM contacts WHERE linkedin_url = ? OR source_url = ? LIMIT 1",
+                    (linkedin_url, linkedin_url),
+                ).fetchone()
             if row is None and source_url:
-                row = conn.execute("SELECT * FROM contacts WHERE source_url = ?", (source_url,)).fetchone()
+                row = conn.execute(
+                    "SELECT * FROM contacts WHERE source_url = ? OR linkedin_url = ? LIMIT 1",
+                    (source_url, source_url),
+                ).fetchone()
             if row is None:
                 row = conn.execute(
                     """
@@ -1868,15 +2271,16 @@ class JobRepository:
                 ).fetchone()
             if row is None:
                 is_new = True
+                was_tracked = False
                 conn.execute(
                     """
                     INSERT INTO contacts (
                         id, name, company, role, email, linkedin_url, source_url,
                         source_provider, source_confidence, channel, relationship,
-                        email_status,
+                        email_status, is_tracked, why_added, network_status,
                         notes, raw_payload, last_seen_at, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         contact_id,
@@ -1891,6 +2295,9 @@ class JobRepository:
                         channel,
                         relationship,
                         email_status,
+                        int(bool(is_tracked)),
+                        why_added,
+                        incoming_network_status or "to_contact",
                         notes,
                         json.dumps(raw_payload or {}),
                         now,
@@ -1901,6 +2308,7 @@ class JobRepository:
             else:
                 is_new = False
                 contact_id = row["id"]
+                was_tracked = bool(row["is_tracked"])
                 merged = _merge_contact(
                     dict(row),
                     {
@@ -1916,6 +2324,9 @@ class JobRepository:
                         "channel": channel,
                         "relationship": relationship,
                         "notes": notes,
+                        "is_tracked": is_tracked,
+                        "why_added": why_added,
+                        "network_status": incoming_network_status,
                         "raw_payload": raw_payload or {},
                     },
                 )
@@ -1924,7 +2335,8 @@ class JobRepository:
                     UPDATE contacts
                     SET name = ?, company = ?, role = ?, email = ?, email_status = ?, linkedin_url = ?,
                         source_url = ?, source_provider = ?, source_confidence = ?,
-                        channel = ?, relationship = ?, notes = ?, raw_payload = ?,
+                        channel = ?, relationship = ?, notes = ?, is_tracked = ?, why_added = ?,
+                        network_status = ?, raw_payload = ?,
                         last_seen_at = ?, updated_at = ?
                     WHERE id = ?
                     """,
@@ -1941,18 +2353,21 @@ class JobRepository:
                         merged.get("channel") or "",
                         merged.get("relationship") or "",
                         merged.get("notes") or "",
+                        int(bool(merged.get("is_tracked"))),
+                        merged.get("why_added") or "",
+                        normalize_person_status(merged.get("network_status") or "to_contact"),
                         json.dumps(merged.get("raw_payload") or {}),
                         now,
                         now,
                         contact_id,
                     ),
                 )
-            if is_new:
+            if is_new or (is_tracked and not was_tracked):
                 self._record_brain_event_conn(
                     conn,
-                    event_type="contact_cached",
+                    event_type="person_tracked" if is_tracked else "contact_cached",
                     title=name,
-                    content=notes or f"{role} at {company}".strip(" at"),
+                    content=why_added or notes or f"{role} at {company}".strip(" at"),
                     entity_type="person",
                     entity_title=name,
                     source=source_provider or "manual",
@@ -1960,10 +2375,97 @@ class JobRepository:
                     confidence=float(source_confidence),
                     importance=0.64,
                     occurred_at=now,
-                    metadata={"contact_id": contact_id, "company": company, "role": role, "email_status": email_status},
+                    metadata={
+                        "contact_id": contact_id,
+                        "company": company,
+                        "role": role,
+                        "email_status": email_status,
+                        "is_tracked": bool(is_tracked),
+                        "network_status": incoming_network_status or "to_contact",
+                    },
                 )
             contact = conn.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone()
         return decode_contact(contact)
+
+    def upsert_person(
+        self,
+        name: str,
+        why_added: str,
+        *,
+        contact_id: str = "",
+        company: str = "",
+        role: str = "",
+        email: str = "",
+        linkedin_url: str = "",
+        notes: str = "",
+        network_status: str = "to_contact",
+        source: str = "agent",
+    ) -> dict[str, Any]:
+        why_added = str(why_added or "").strip()
+        if not why_added:
+            raise ValueError("Why this person was added is required.")
+        email = normalize_space_for_db(email).lower()
+        if email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            raise ValueError("Email must be a valid address or left blank.")
+        linkedin_url = normalize_space_for_db(linkedin_url)
+        if linkedin_url and not re.match(r"^https?://([a-z0-9-]+\.)?linkedin\.com/", linkedin_url, re.IGNORECASE):
+            raise ValueError("LinkedIn must be a full linkedin.com URL or left blank.")
+        return self.upsert_contact(
+            name,
+            contact_id=contact_id,
+            company=company,
+            role=role,
+            email=email,
+            email_status="found" if email else "missing",
+            linkedin_url=linkedin_url,
+            source_url=linkedin_url,
+            source_provider=normalize_space_for_db(source) or "agent",
+            source_confidence=1.0,
+            notes=str(notes or "").strip(),
+            is_tracked=True,
+            why_added=why_added,
+            network_status=network_status,
+        )
+
+    def append_person_note(
+        self,
+        contact_id: str,
+        note: str,
+        *,
+        network_status: str | None = None,
+        source: str = "agent",
+    ) -> dict[str, Any]:
+        note = str(note or "").strip()
+        if not note:
+            raise ValueError("Note is required.")
+        now = utc_now()
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM contacts WHERE id = ? AND is_tracked = 1", (contact_id,)).fetchone()
+            if row is None:
+                raise KeyError(contact_id)
+            existing = str(row["notes"] or "").rstrip()
+            notes = f"{existing}\n{note}" if existing else note
+            status = normalize_person_status(network_status or row["network_status"] or "to_contact")
+            conn.execute(
+                "UPDATE contacts SET notes = ?, network_status = ?, updated_at = ? WHERE id = ?",
+                (notes, status, now, contact_id),
+            )
+            self._record_brain_event_conn(
+                conn,
+                event_type="person_note_added",
+                title=row["name"],
+                content=note,
+                entity_type="person",
+                entity_title=row["name"],
+                source=normalize_space_for_db(source) or "agent",
+                evidence_text=row["linkedin_url"] or row["email"] or "",
+                confidence=1.0,
+                importance=0.62,
+                occurred_at=now,
+                metadata={"contact_id": contact_id, "network_status": status},
+            )
+            updated = conn.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone()
+        return decode_contact(updated)
 
     def get_contact(self, contact_id: str) -> dict[str, Any]:
         with self._connect() as conn:
@@ -1972,16 +2474,55 @@ class JobRepository:
                 raise KeyError(contact_id)
         return decode_contact(row)
 
-    def list_contacts(self, company: str | None = None, *, limit: int = 80) -> list[dict[str, Any]]:
+    def list_contacts(
+        self,
+        company: str | None = None,
+        *,
+        tracked: bool | None = None,
+        limit: int = 80,
+    ) -> list[dict[str, Any]]:
         params: list[Any] = []
-        where = ""
+        clauses: list[str] = []
         if company:
-            where = "WHERE lower(company) = ?"
+            clauses.append("lower(company) = ?")
             params.append(company.lower())
+        if tracked is not None:
+            clauses.append("is_tracked = ?")
+            params.append(int(tracked))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         with self._connect() as conn:
             rows = conn.execute(
                 f"SELECT * FROM contacts {where} ORDER BY updated_at DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+        return [decode_contact(row) for row in rows]
+
+    def list_people(
+        self,
+        query: str = "",
+        *,
+        status: str = "all",
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        clauses = ["is_tracked = 1"]
+        params: list[Any] = []
+        normalized_status = str(status or "all").strip().lower()
+        if normalized_status not in {"", "all"}:
+            clauses.append("network_status = ?")
+            params.append(normalize_person_status(normalized_status))
+        query = normalize_space_for_db(query).lower()
+        if query:
+            wildcard = f"%{query}%"
+            clauses.append(
+                "lower(name || ' ' || COALESCE(company, '') || ' ' || COALESCE(role, '') || ' ' || "
+                "COALESCE(email, '') || ' ' || COALESCE(why_added, '') || ' ' || COALESCE(notes, '')) LIKE ?"
+            )
+            params.append(wildcard)
+        params.append(max(1, min(int(limit), 500)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM contacts WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC LIMIT ?",
                 tuple(params),
             ).fetchall()
         return [decode_contact(row) for row in rows]
@@ -2349,7 +2890,8 @@ class JobRepository:
                 ],
                 "counts": self.discovery_counts(),
             },
-            "contacts": [_compact_contact(item) for item in self.list_contacts(limit=80)],
+            "contacts": [_compact_contact(item) for item in self.list_contacts(tracked=False, limit=80)],
+            "people": [_compact_person(item) for item in self.list_people(limit=200)],
             "followup_count": len(followup_rows),
             "progress_count": len(progress_rows),
             "approval_count": len(approval_rows),
@@ -2371,7 +2913,8 @@ class JobRepository:
                 "brain_entities": self.count_brain_entities(),
                 "brain_events": self.count_brain_events(),
                 "discovery_candidates": self.discovery_counts().get("total", 0),
-                "contacts": len(self.list_contacts(limit=1000)),
+                "contacts": len(self.list_contacts(tracked=False, limit=1000)),
+                "people": len(self.list_people(limit=1000)),
             },
         }
 
@@ -2894,10 +3437,26 @@ class JobRepository:
             "events": events[:result_limit],
         }
 
-    def brain_context(self, *, query: str = "", limit: int = 12) -> dict[str, Any]:
-        result_limit = bounded_limit(limit, default=12, maximum=80)
-        recent_events = self.list_brain_events(limit=result_limit)
-        search = self.search_brain(query, limit=result_limit) if query else None
+    def brain_context(
+        self,
+        *,
+        query: str = "",
+        limit: int = 6,
+        include_recent: bool = False,
+        event_type: str | None = None,
+        job_id: str | None = None,
+    ) -> dict[str, Any]:
+        result_limit = bounded_limit(limit, default=6, maximum=8)
+        search = (
+            self.search_brain(
+                query,
+                event_type=event_type,
+                job_id=job_id,
+                limit=result_limit,
+            )
+            if query
+            else None
+        )
         with self._connect() as conn:
             entity_counts = {
                 row["entity_type"]: row["count"]
@@ -2921,17 +3480,27 @@ class JobRepository:
                     """
                 ).fetchall()
             }
-        return {
+        output: dict[str, Any] = {
             "entity_counts": entity_counts,
             "event_counts": event_counts,
-            "recent_events": recent_events,
-            "search": search,
+            "search": _compact_brain_search(search) if search else None,
             "policy": {
                 "source_of_truth": "JobApps SQLite career brain",
                 "shape": "entity registry plus immutable event ledger",
+                "retrieval": "counts by default; compact targeted results only when queried",
                 "hermes_memory_role": "durable preferences and lessons; app DB keeps job-search facts and provenance",
             },
         }
+        if include_recent:
+            output["recent_events"] = [
+                _compact_brain_event(item)
+                for item in self.list_brain_events(
+                    event_type=event_type,
+                    job_id=job_id,
+                    limit=result_limit,
+                )
+            ]
+        return output
 
     def count_brain_entities(self) -> int:
         with self._connect() as conn:
@@ -2990,6 +3559,20 @@ class JobRepository:
     def list_profile_facts(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM profile_facts ORDER BY category, fact_key").fetchall()
+        return [dict(row) for row in rows]
+
+    def list_candidate_facts(self) -> list[dict[str, Any]]:
+        placeholders = ", ".join("?" for _ in CANDIDATE_FACT_CATEGORIES)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT fact_key, value, category, source, confidence
+                FROM profile_facts
+                WHERE category IN ({placeholders})
+                ORDER BY category, fact_key
+                """,
+                tuple(sorted(CANDIDATE_FACT_CATEGORIES)),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def upsert_proof_point(
@@ -3715,10 +4298,12 @@ class JobRepository:
         return {
             "job_id": job_id,
             "job": job,
+            "profile_facts": self.list_candidate_facts(),
             "policy": "active_user_confirmed_first",
             "query": query,
             "requirements": requirements,
             "signals": self.list_application_signals(job_id),
+            "learning_patterns": self.retrieve_learning_patterns(query, use=use, limit=8),
             "evidence": search["results"],
             "excluded": excluded,
             "eligibility_filter": search["eligibility_filter"],
@@ -3761,11 +4346,36 @@ class JobRepository:
     def _sync_proof_point_chunk_conn(self, conn: sqlite3.Connection, proof: dict[str, Any]) -> None:
         text = proof_corpus_for_repo(proof)
         checksum = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        tags = json.dumps(proof.get("tags", []))
+        user_confirmed = 1 if proof.get("user_confirmed", True) else 0
+        allowed_uses = json.dumps(proof.get("allowed_uses", []))
         now = utc_now()
         existing = conn.execute(
-            "SELECT id FROM retrieval_chunks WHERE source_table = ? AND source_id = ? AND chunk_type = ?",
+            """
+            SELECT id, text, tags, role_family, status, user_confirmed,
+                   narrative_version, allowed_uses, risk_level, valid_from,
+                   valid_to, superseded_by, checksum
+            FROM retrieval_chunks
+            WHERE source_table = ? AND source_id = ? AND chunk_type = ?
+            """,
             ("proof_points", proof["id"], "proof_point"),
         ).fetchone()
+        comparable_fields = {
+            "text": text,
+            "tags": tags,
+            "role_family": proof.get("role_family", "other"),
+            "status": proof.get("status", "active"),
+            "user_confirmed": user_confirmed,
+            "narrative_version": proof.get("narrative_version", "current"),
+            "allowed_uses": allowed_uses,
+            "risk_level": proof.get("risk_level", "safe"),
+            "valid_from": proof.get("valid_from"),
+            "valid_to": proof.get("valid_to"),
+            "superseded_by": proof.get("superseded_by"),
+            "checksum": checksum,
+        }
+        if existing is not None and all(existing[field] == value for field, value in comparable_fields.items()):
+            return
         chunk_id = existing["id"] if existing else uuid.uuid4().hex[:12]
         params = (
             chunk_id,
@@ -3773,12 +4383,12 @@ class JobRepository:
             proof["id"],
             "proof_point",
             text,
-            json.dumps(proof.get("tags", [])),
+            tags,
             proof.get("role_family", "other"),
             proof.get("status", "active"),
-            1 if proof.get("user_confirmed", True) else 0,
+            user_confirmed,
             proof.get("narrative_version", "current"),
-            json.dumps(proof.get("allowed_uses", [])),
+            allowed_uses,
             proof.get("risk_level", "safe"),
             proof.get("valid_from"),
             proof.get("valid_to"),
@@ -3818,19 +4428,32 @@ class JobRepository:
             (chunk_id, text, " ".join(proof.get("tags", []))),
         )
 
-    def career_context(self, *, use: str | None = "resume") -> dict[str, Any]:
+    def career_context(
+        self,
+        *,
+        use: str | None = "resume",
+        query: str = "",
+        learning_limit: int = 10,
+    ) -> dict[str, Any]:
+        normalized_use = str(use or "resume")
         return {
-            "profile_facts": self.list_profile_facts(),
-            "proof_points": self.list_proof_points(use=use),
-            "recent_jobs": self.list_jobs(limit=12),
-            # Learning patterns are the personalization rulebook. They are
-            # bounded by merge-on-write, so inject all of them: a recency cap
-            # silently dropped the oldest (often most fundamental) rules.
-            "learning_patterns": self.list_learning_patterns(limit=400),
-            "brain_context": self.brain_context(limit=12),
-            "recent_tailoring_requirements": self.list_tailoring_requirements(limit=40),
-            "recent_portrayal_decisions": self.list_portrayal_decisions(limit=40),
-            "proof_filter": {"use": use, "policy": "active_user_confirmed_not_superseded"},
+            "profile_facts": self.list_candidate_facts(),
+            # Evidence is intentionally absent here. Material paths must use
+            # retrieve_for_job()/search_evidence() so proof is job-targeted.
+            "proof_points": [],
+            "learning_patterns": self.retrieve_learning_patterns(
+                query,
+                use=normalized_use,
+                limit=learning_limit,
+            ),
+            "brain_context": self.brain_context(limit=6),
+            "proof_filter": {"use": normalized_use, "policy": "active_user_confirmed_not_superseded"},
+            "context_policy": {
+                "profile_facts": "fixed_candidate_fact_categories",
+                "proof_points": "targeted_retrieval_only",
+                "learning_patterns": "current_exact_use_policy",
+                "brain_events": "counts_only_unless_explicitly_queried",
+            },
         }
 
     def create_agent_run(
@@ -4659,6 +5282,39 @@ def _clip_text(value: Any, limit: int) -> str:
     return text[: limit - 60] + f"\n… [truncated; {len(text)} chars total]"
 
 
+def _compact_brain_event(event: dict[str, Any]) -> dict[str, Any]:
+    raw_entity = event.get("entity")
+    entity: dict[str, Any] = raw_entity if isinstance(raw_entity, dict) else {}
+    compact = {
+        "id": event.get("id"),
+        "job_id": event.get("job_id"),
+        "event_type": event.get("event_type"),
+        "title": _clip_text(event.get("title"), 180),
+        "content": _clip_text(event.get("content"), 500),
+        "source": event.get("source"),
+        "occurred_at": event.get("occurred_at"),
+        "entity": {
+            "id": entity.get("id"),
+            "type": entity.get("type"),
+            "title": _clip_text(entity.get("title"), 160),
+        },
+    }
+    if event.get("rank") is not None:
+        compact["rank"] = event.get("rank")
+    return compact
+
+
+def _compact_brain_search(search: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not search:
+        return None
+    return {
+        "query": search.get("query"),
+        "retrieval_mode": search.get("retrieval_mode"),
+        "filters": search.get("filters"),
+        "events": [_compact_brain_event(item) for item in search.get("events", [])],
+    }
+
+
 def _compact_discovery_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     compact = dict(candidate)
     compact.pop("raw_payload", None)
@@ -4679,6 +5335,23 @@ def _compact_contact(contact: dict[str, Any]) -> dict[str, Any]:
         "linkedin_url": contact.get("linkedin_url", ""),
         "source_url": contact.get("source_url", ""),
         "job_id": contact.get("job_id", ""),
+        "updated_at": contact.get("updated_at", ""),
+    }
+
+
+def _compact_person(contact: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": contact.get("id", ""),
+        "name": contact.get("name", ""),
+        "company": contact.get("company", ""),
+        "role": contact.get("role", ""),
+        "email": contact.get("email", ""),
+        "email_status": contact.get("email_status", ""),
+        "linkedin_url": contact.get("linkedin_url", ""),
+        "why_added": contact.get("why_added", ""),
+        "notes": contact.get("notes", ""),
+        "network_status": contact.get("network_status", "to_contact"),
+        "created_at": contact.get("created_at", ""),
         "updated_at": contact.get("updated_at", ""),
     }
 
@@ -5143,6 +5816,8 @@ def decode_contact(row: sqlite3.Row) -> dict[str, Any]:
     item["raw_payload"] = json.loads(item.get("raw_payload") or "{}")
     item["source_confidence"] = float(item.get("source_confidence") or 0)
     item["email_status"] = normalize_email_status(item.get("email_status") or ("found" if item.get("email") else "missing"))
+    item["is_tracked"] = bool(item.get("is_tracked", 0))
+    item["network_status"] = normalize_person_status(item.get("network_status") or "to_contact")
     return item
 
 
@@ -5265,6 +5940,18 @@ def _merge_discovery_status(current: str, incoming: str) -> str:
 
 def _merge_contact(current: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     merged = dict(current)
+    protect_tracked = bool(current.get("is_tracked")) and not bool(incoming.get("is_tracked"))
+    tracked_narrative_fields = {"notes", "why_added", "network_status"}
+    tracked_explicit_fields = {
+        "name",
+        "company",
+        "role",
+        "email",
+        "linkedin_url",
+        "source_provider",
+        "channel",
+        "relationship",
+    }
     for key in (
         "name",
         "company",
@@ -5276,10 +5963,17 @@ def _merge_contact(current: dict[str, Any], incoming: dict[str, Any]) -> dict[st
         "channel",
         "relationship",
         "notes",
+        "why_added",
+        "network_status",
     ):
         value = incoming.get(key)
+        if protect_tracked and key in tracked_narrative_fields:
+            continue
+        if protect_tracked and key in tracked_explicit_fields and current.get(key) not in (None, ""):
+            continue
         if value not in (None, ""):
             merged[key] = value
+    merged["is_tracked"] = bool(current.get("is_tracked")) or bool(incoming.get("is_tracked"))
     if "source_confidence" in incoming:
         merged["source_confidence"] = max(float(current.get("source_confidence") or 0), float(incoming.get("source_confidence") or 0))
     merged["email_status"] = strongest_email_status(
@@ -5537,6 +6231,15 @@ def normalize_email_status(status: str) -> str:
     if value in {"found", "missing", "unverified", "unknown"}:
         return value
     return "unverified"
+
+
+def normalize_person_status(status: str) -> str:
+    value = str(status or "to_contact").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {"followup": "follow_up", "to_reach_out": "to_contact", "reached_out": "contacted"}
+    value = aliases.get(value, value)
+    if value not in {"to_contact", "contacted", "follow_up", "paused"}:
+        raise ValueError(f"Unsupported person status: {status}")
+    return value
 
 
 def strongest_email_status(current: str, incoming: str) -> str:
@@ -5864,6 +6567,19 @@ def _active_hermes_run(agent_runs: list[dict[str, Any]]) -> dict[str, Any] | Non
         if run.get("kind") == "hermes_run" and run.get("status") in ACTIVE_HERMES_RUN_STATUSES:
             return run
     return None
+
+
+def material_source_sha256(material: dict[str, Any]) -> str:
+    file_path = str(material.get("file_path") or "").strip()
+    if file_path:
+        path = Path(file_path).expanduser()
+        if path.is_file():
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        return ""
+    content = material.get("content")
+    if not isinstance(content, str):
+        return ""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def utc_now() -> str:

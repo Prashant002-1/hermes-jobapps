@@ -12,6 +12,12 @@ const composer = $("#composer");
 const composerInput = $("#composerInput");
 const barDot = $("#barDot");
 const barStatus = $("#barStatus");
+const appShell = $(".app");
+const navRail = $("#navRail");
+const navToggle = $("#navToggle");
+const navToggleIcon = $("#navToggleIcon");
+const navBackdrop = $("#navBackdrop");
+const barViewTitle = $("#barViewTitle");
 const commandMenu = $("#commandMenu");
 const agentLive = $("#agentLive");
 const agentProfile = $("#agentProfile");
@@ -49,6 +55,9 @@ const brainList = $("#brainList");
 const brainAreaList = $("#brainAreaList");
 const brainEventCount = $("#brainEventCount");
 const brainAreaCount = $("#brainAreaCount");
+const brainQueryStatus = $("#brainQueryStatus");
+const brainLedgerTitle = $("#brainLedgerTitle");
+const brainLedgerNote = $("#brainLedgerNote");
 const discoveryRefresh = $("#discoveryRefresh");
 const discoveryStats = $("#discoveryStats");
 const discoverySearchForm = $("#discoverySearchForm");
@@ -68,6 +77,14 @@ const actionsStats = $("#actionsStats");
 const actionsSearch = $("#actionsSearch");
 const actionsBoard = $("#actionsBoard");
 const actionsMessage = $("#actionsMessage");
+const peopleStats = $("#peopleStats");
+const peopleSearch = $("#peopleSearch");
+const peopleList = $("#peopleList");
+const peopleForm = $("#peopleForm");
+const peopleFormTitle = $("#peopleFormTitle");
+const peopleFormCancel = $("#peopleFormCancel");
+const peopleMessage = $("#peopleMessage");
+const peopleSave = $("#peopleSave");
 
 const CHAT_STATE_KEY = "hermes-jobapps.chatState.v1";
 const UI_STATE_KEY = "hermes-jobapps.uiState.v1";
@@ -75,6 +92,7 @@ const STATE_CACHE_DB = "hermes-jobapps.state.v1";
 const STATE_CACHE_STORE = "state";
 const STATE_CACHE_KEY = "latest";
 const MAX_SAVED_TURNS = 80;
+const NAV_COLLAPSED_KEY = "hermes-jobapps.navCollapsed.v1";
 
 /* ── State ── */
 let messages = [];
@@ -101,6 +119,13 @@ let pendingTurn = null;
 let restoringChatState = false;
 let brainQuery = "";
 let brainAreaFilter = "all";
+let brainRecentEvents = [];
+let brainSearchEvents = [];
+let brainRecentLoaded = false;
+let brainLoading = false;
+let brainError = "";
+let brainSearchTimer = null;
+let brainRequestSequence = 0;
 let discoveryStatus = null;
 let discoveryQueryFilter = "";
 let discoveryStatusFilter = "all";
@@ -108,12 +133,28 @@ let discoveryBusy = false;
 let actionsQuery = "";
 let actionsLaneFilter = "all";
 let actionsMessageTimer = null;
+let peopleQuery = "";
+let peopleStatusFilter = "all";
+let peopleMessageTimer = null;
 let jobsMessageTimer = null;
 let pipelineMessage = "";
 let pipelineMessageKind = "";
 let pipelineMessageTimer = null;
 const pipelineExpanded = { applied: false, skip: false };
 let uiStateWriteTimer = null;
+let navMobileOpen = false;
+
+const readNavCollapsed = () => {
+  try {
+    const saved = localStorage.getItem(NAV_COLLAPSED_KEY);
+    if (saved !== null) return saved === "true";
+  } catch (err) {
+    // Local storage is optional; the shell still works for this visit.
+  }
+  return window.innerWidth <= 1100 && window.innerWidth > 720;
+};
+
+let navCollapsed = readNavCollapsed();
 
 /* ── Helpers ── */
 const esc = (s) => {
@@ -130,6 +171,24 @@ const postJson = async (url, body) => {
     body: JSON.stringify(body),
   });
   return res.json();
+};
+
+const postJsonStrict = async (url, body) => {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let payload = null;
+  try {
+    payload = await res.json();
+  } catch (err) {
+    payload = null;
+  }
+  if (!res.ok || payload?.error) {
+    throw new Error(payload?.error || `Request failed (${res.status})`);
+  }
+  return payload || {};
 };
 
 const fetchJson = async (url) => {
@@ -576,6 +635,48 @@ const initNav = () => {
       if (view) switchView(view);
     });
   });
+  navToggle?.addEventListener("click", () => {
+    if (window.innerWidth <= 720) {
+      navMobileOpen = !navMobileOpen;
+    } else {
+      navCollapsed = !navCollapsed;
+      try {
+        localStorage.setItem(NAV_COLLAPSED_KEY, String(navCollapsed));
+      } catch (err) {
+        // Persistence is a convenience; the current shell state is enough.
+      }
+    }
+    syncNavigationShell();
+  });
+  navBackdrop?.addEventListener("click", closeMobileNavigation);
+  window.addEventListener("resize", syncNavigationShell);
+  syncNavigationShell();
+};
+
+const closeMobileNavigation = () => {
+  if (!navMobileOpen) return;
+  navMobileOpen = false;
+  syncNavigationShell();
+};
+
+const syncNavigationShell = () => {
+  const mobile = window.innerWidth <= 720;
+  appShell?.classList.toggle("nav-collapsed", !mobile && navCollapsed);
+  document.body.classList.toggle("nav-mobile-open", mobile && navMobileOpen);
+  if (navToggle) {
+    const expanded = mobile ? navMobileOpen : !navCollapsed;
+    navToggle.setAttribute("aria-expanded", String(expanded));
+    navToggle.title = mobile
+      ? (navMobileOpen ? "Close navigation" : "Open navigation")
+      : (navCollapsed ? "Expand sidebar" : "Collapse sidebar");
+  }
+  if (navToggleIcon) {
+    navToggleIcon.textContent = mobile
+      ? (navMobileOpen ? "close" : "menu")
+      : (navCollapsed ? "left_panel_open" : "left_panel_close");
+  }
+  navRail?.setAttribute("aria-hidden", String(mobile && !navMobileOpen));
+  navBackdrop?.setAttribute("aria-hidden", String(!(mobile && navMobileOpen)));
 };
 
 const switchView = (view) => {
@@ -586,6 +687,15 @@ const switchView = (view) => {
 
   // Update views
   $$(".view").forEach((el) => el.classList.toggle("active", el.dataset.view === view));
+
+  const activeNav = $(`.nav-item[data-view="${view}"]`);
+  const activeView = $(`.view[data-view="${view}"]`);
+  if (barViewTitle) {
+    barViewTitle.textContent = activeNav?.querySelector(".nav-label")?.textContent?.trim()
+      || activeView?.querySelector("h1")?.textContent?.trim()
+      || humanize(view);
+  }
+  closeMobileNavigation();
 
   renderCurrentView();
   scrollCurrentViewToTop();
@@ -900,10 +1010,13 @@ const dashboardQueue = () => {
   }));
   const health = appState?.database_health || {};
   if (health.status && health.status !== "ok") {
+    const stale = health.stale_records || {};
+    const actionable = ["unattached_followups", "unattached_agent_runs"]
+      .reduce((total, key) => total + (Array.isArray(stale[key]) ? stale[key].length : 0), 0);
     rows.push({
       type: "State",
       title: humanize(health.status),
-      context: `${fmtNum(health.actionable_count || 0)} records need mapping`,
+      context: health.recommendations?.[0] || `${fmtNum(actionable)} records need mapping`,
       due: "",
     });
   }
@@ -979,7 +1092,7 @@ const renderStateQueue = (rows) => {
       </div>
       <time>${esc(item.due || "")}</time>
     </div>
-  `).join("") : '<div class="empty-state">clear</div>';
+  `).join("") : '<div class="empty-state">No open actions</div>';
   queue.innerHTML = `
     <div class="state-focus-head">
       <span class="eyebrow">Needs Action</span>
@@ -1104,8 +1217,11 @@ const actionGroupDueText = (group) => {
 };
 
 const actionGroupBadgeClass = (group) => (
-  classToken(group.decision, ["apply", "skip", "pending"]) ||
-  (String(group.status || "").toLowerCase().includes("review") ? "review" : "pending")
+  /rejected|declined|closed|skip/.test(String(group.status || "").toLowerCase())
+    ? "skip"
+    : String(group.status || "").toLowerCase().includes("review")
+      ? "review"
+      : classToken(group.decision, ["apply", "skip", "pending"]) || "pending"
 );
 
 const groupActionRows = (rows) => {
@@ -1207,7 +1323,7 @@ const renderActions = () => {
   const groups = groupActionRows(filtered);
   actionsBoard.innerHTML = groups.length
     ? groups.map(renderActionJobGroup).join("")
-    : `<div class="empty-state">${rows.length ? "no matching actions" : "clear"}</div>`;
+    : `<div class="empty-state">${rows.length ? "No matching actions" : "No open actions"}</div>`;
   attachActionControls(actionsBoard);
 };
 
@@ -1505,7 +1621,7 @@ const renderDashboard = () => {
       el.appendChild(toggle);
     }
     if (!el.children.length) {
-      el.innerHTML = '<div class="empty-state">empty</div>';
+      el.innerHTML = '<div class="empty-state">No jobs</div>';
     }
   });
   setText("#pipeInboxCount", stageCounts.new);
@@ -1531,7 +1647,7 @@ const renderDashboard = () => {
     timeline.appendChild(renderTimelineItem(ev, true));
   });
   if (!events.length) {
-    timeline.innerHTML = '<div class="empty-state">empty</div>';
+    timeline.innerHTML = '<div class="empty-state">No recent activity</div>';
   }
 
   // Workflows
@@ -1550,43 +1666,123 @@ const renderDashboard = () => {
       wfList.appendChild(item);
     });
   } else {
-    wfList.innerHTML = '<div class="empty-state">empty</div>';
+    wfList.innerHTML = '<div class="empty-state">No recent Hermes runs</div>';
   }
 };
 
 /* ── Brain ── */
+const loadBrainRecent = async ({ force = false } = {}) => {
+  if (!appState || brainQuery.trim() || (brainRecentLoaded && !force) || brainLoading) return;
+  const requestId = ++brainRequestSequence;
+  brainLoading = true;
+  brainError = "";
+  renderBrain();
+  try {
+    const result = await postJsonStrict("/api/tools/jobapps_brain_context", {
+      include_recent: true,
+      limit: 8,
+    });
+    if (requestId !== brainRequestSequence) return;
+    brainRecentEvents = Array.isArray(result.recent_events) ? result.recent_events : [];
+    brainRecentLoaded = true;
+  } catch (err) {
+    if (requestId !== brainRequestSequence) return;
+    brainError = err.message || "Memory is unavailable.";
+  } finally {
+    if (requestId === brainRequestSequence) {
+      brainLoading = false;
+      renderBrain();
+    }
+  }
+};
+
+const loadBrainSearch = async () => {
+  const query = brainQuery.trim();
+  if (!query) return;
+  const requestId = ++brainRequestSequence;
+  brainLoading = true;
+  brainError = "";
+  renderBrain();
+  const payload = { query, limit: 10 };
+  if (brainAreaFilter !== "all") payload.entity_type = brainAreaFilter;
+  try {
+    const result = await postJsonStrict("/api/tools/jobapps_search_brain", payload);
+    if (requestId !== brainRequestSequence) return;
+    brainSearchEvents = Array.isArray(result.events) ? result.events : [];
+  } catch (err) {
+    if (requestId !== brainRequestSequence) return;
+    brainSearchEvents = [];
+    brainError = err.message || "Search is unavailable.";
+  } finally {
+    if (requestId === brainRequestSequence) {
+      brainLoading = false;
+      renderBrain();
+    }
+  }
+};
+
+const queueBrainSearch = ({ immediate = false } = {}) => {
+  if (brainSearchTimer) window.clearTimeout(brainSearchTimer);
+  brainSearchTimer = null;
+  brainRequestSequence += 1;
+  if (!brainQuery.trim()) {
+    brainLoading = false;
+    brainError = "";
+    brainSearchEvents = [];
+    renderBrain();
+    loadBrainRecent().catch(() => {});
+    return;
+  }
+  brainLoading = true;
+  brainError = "";
+  brainSearchEvents = [];
+  renderBrain();
+  if (immediate) {
+    loadBrainSearch().catch(() => {});
+    return;
+  }
+  brainSearchTimer = window.setTimeout(() => {
+    brainSearchTimer = null;
+    loadBrainSearch().catch(() => {});
+  }, 240);
+};
+
 const renderBrain = () => {
   if (!appState) return;
   const brain = appState.brain || {};
   const entityCounts = brain.entity_counts || {};
   const eventCounts = brain.event_counts || {};
-  const events = brain.recent_events || [];
   const query = brainQuery.trim().toLowerCase();
   const areas = Object.entries(entityCounts).sort((a, b) => Number(b[1]) - Number(a[1]));
+  const entityTotal = Number(appState.context_counts?.brain_entities)
+    || areas.reduce((sum, [, count]) => sum + Number(count || 0), 0);
+  const eventTotal = Number(appState.context_counts?.brain_events)
+    || Object.values(eventCounts).reduce((sum, count) => sum + Number(count || 0), 0);
   if (brainAreaFilter !== "all" && !areas.some(([type]) => type === brainAreaFilter)) {
     brainAreaFilter = "all";
   }
+  const events = query ? brainSearchEvents : brainRecentEvents;
   const filtered = events.filter((event) => {
     const entity = event.entity || {};
     const areaMatch = brainAreaFilter === "all" || entity.type === brainAreaFilter;
-    const queryMatch = !query || [
-      event.event_type,
-      event.title,
-      event.content,
-      event.evidence_text,
-      entity.title,
-      entity.type,
-    ].some((value) => String(value || "").toLowerCase().includes(query));
-    return areaMatch && queryMatch;
+    return areaMatch;
   });
 
   if (brainStats) {
     brainStats.innerHTML = `
-      <div class="brain-stat"><span>Entities</span><strong>${fmtNum(appState.context_counts?.brain_entities || 0)}</strong></div>
-      <div class="brain-stat"><span>Events</span><strong>${fmtNum(appState.context_counts?.brain_events || 0)}</strong></div>
-      <div class="brain-stat"><span>Decisions</span><strong>${fmtNum(eventCounts.portrayal_decision || 0)}</strong></div>
-      <div class="brain-stat"><span>Signals</span><strong>${fmtNum(eventCounts.conversation_signal || 0)}</strong></div>
+      <div class="brain-stat"><span>Entities</span><strong>${fmtNum(entityTotal)}</strong></div>
+      <div class="brain-stat"><span>Events</span><strong>${fmtNum(eventTotal)}</strong></div>
+      <div class="brain-stat"><span>Entity Types</span><strong>${fmtNum(areas.length)}</strong></div>
+      <div class="brain-stat"><span>Event Streams</span><strong>${fmtNum(Object.keys(eventCounts).length)}</strong></div>
     `;
+  }
+
+  if (brainQueryStatus) {
+    if (brainLoading) brainQueryStatus.textContent = query ? "searching" : "loading";
+    else if (brainError) brainQueryStatus.textContent = "unavailable";
+    else if (query) brainQueryStatus.textContent = `${fmtNum(filtered.length)} found`;
+    else if (brainRecentLoaded) brainQueryStatus.textContent = `${fmtNum(filtered.length)} recent`;
+    else brainQueryStatus.textContent = "";
   }
 
   if (brainAreaCount) brainAreaCount.textContent = fmtNum(areas.length);
@@ -1595,11 +1791,12 @@ const renderBrain = () => {
     const all = document.createElement("button");
     all.type = "button";
     all.className = `brain-area${brainAreaFilter === "all" ? " active" : ""}`;
-    all.innerHTML = `<span>All</span><strong>${fmtNum(events.length)}</strong>`;
-    setTip(all, "Show every recorded memory event.");
+    all.innerHTML = `<span>All</span><strong>${fmtNum(entityTotal)}</strong>`;
+    setTip(all, "Use every career-brain entity type.");
     all.addEventListener("click", () => {
       brainAreaFilter = "all";
-      renderBrain();
+      if (query) queueBrainSearch({ immediate: true });
+      else renderBrain();
     });
     brainAreaList.appendChild(all);
     areas.forEach(([type, count]) => {
@@ -1607,20 +1804,57 @@ const renderBrain = () => {
       item.type = "button";
       item.className = `brain-area${brainAreaFilter === type ? " active" : ""}`;
       item.innerHTML = `<span>${esc(type.replace(/_/g, " "))}</span><strong>${fmtNum(count)}</strong>`;
-      setTip(item, `Show ${type.replace(/_/g, " ")} memory events.`);
+      setTip(item, `Use the ${type.replace(/_/g, " ")} area.`);
       item.addEventListener("click", () => {
         brainAreaFilter = type;
-        renderBrain();
+        if (query) queueBrainSearch({ immediate: true });
+        else renderBrain();
       });
       brainAreaList.appendChild(item);
     });
   }
 
+  const areaLabel = brainAreaFilter === "all" ? "" : humanize(brainAreaFilter);
+  if (brainLedgerTitle) {
+    brainLedgerTitle.textContent = query ? "Search Results" : areaLabel ? `Recent ${areaLabel} Memory` : "Recent Memory";
+  }
+  if (brainLedgerNote) {
+    brainLedgerNote.textContent = query
+      ? `Matches for “${brainQuery.trim()}”${areaLabel ? ` in ${areaLabel}` : ""}`
+      : areaLabel
+        ? `Latest recorded ${areaLabel} context`
+        : "Latest recorded context";
+  }
   if (brainEventCount) brainEventCount.textContent = fmtNum(filtered.length);
   if (brainList) {
     brainList.innerHTML = "";
-    if (!filtered.length) {
-      brainList.innerHTML = '<div class="empty-state">empty</div>';
+    if (brainLoading) {
+      brainList.innerHTML = `
+        <div class="brain-state">
+          <strong>${query ? "Searching memory" : "Loading recent memory"}</strong>
+          <span>${query ? "Looking across the recorded career history." : "Reading the latest recorded context."}</span>
+        </div>
+      `;
+    } else if (brainError) {
+      brainList.innerHTML = `
+        <div class="brain-state brain-state-error">
+          <strong>Memory unavailable</strong>
+          <span>${esc(brainError)}</span>
+          <button class="link-button" type="button" data-brain-retry>Retry</button>
+        </div>
+      `;
+      brainList.querySelector("[data-brain-retry]")?.addEventListener("click", () => {
+        if (query) loadBrainSearch().catch(() => {});
+        else loadBrainRecent({ force: true }).catch(() => {});
+      });
+    } else if (!filtered.length) {
+      const title = query ? "No matching memory" : areaLabel ? `No recent ${areaLabel} context` : "No recorded memory";
+      const detail = query
+        ? "Try a person, company, project, decision, or exact phrase."
+        : areaLabel
+          ? "Search to look through the full ledger for this area."
+          : "Recorded career context will appear here.";
+      brainList.innerHTML = `<div class="brain-state"><strong>${esc(title)}</strong><span>${esc(detail)}</span></div>`;
     } else {
       filtered.forEach((event) => {
         const entity = event.entity || {};
@@ -1629,16 +1863,16 @@ const renderBrain = () => {
         const meta = [
           event.event_type ? humanize(event.event_type) : "",
           entity.title || entity.type || "",
+          event.source || "",
           event.job_id ? `job ${event.job_id}` : "",
-          fmtDateTime(event.occurred_at || event.created_at),
         ].filter(Boolean);
         item.innerHTML = `
           <div class="brain-event-top">
             <span class="brain-kind">${esc(entity.type ? humanize(entity.type) : "memory")}</span>
-            <span class="brain-importance">${Math.round(Number(event.importance || 0) * 100)} importance</span>
+            <time class="brain-event-time">${esc(fmtDateTime(event.occurred_at || event.created_at) || "")}</time>
           </div>
           <h3>${esc(event.title || "Memory")}</h3>
-          <p>${esc(event.content || event.evidence_text || "").slice(0, 560)}</p>
+          <p>${esc(String(event.content || "No additional detail recorded.").slice(0, 560))}</p>
           <div class="brain-meta">${meta.map((part) => `<span>${esc(part)}</span>`).join("")}</div>
         `;
         brainList.appendChild(item);
@@ -1738,7 +1972,7 @@ const renderDiscoveryList = (candidates) => {
     );
   }
   if (!filtered.length) {
-    discoveryList.innerHTML = '<div class="empty-state">empty</div>';
+    discoveryList.innerHTML = '<div class="empty-state">No matching leads</div>';
     return;
   }
   discoveryList.className = "discovery-list discovery-board";
@@ -1755,7 +1989,7 @@ const renderDiscoveryList = (candidates) => {
     `;
     const body = col.querySelector(".lead-column-body");
     if (!laneItems.length) {
-      body.innerHTML = '<div class="empty-state">empty</div>';
+      body.innerHTML = '<div class="empty-state">No leads</div>';
     }
     laneItems.forEach((item) => {
       body.appendChild(renderLeadCard(item));
@@ -2095,7 +2329,7 @@ const renderJobs = () => {
 
   if (!jobs.length) {
     currentJobId = null;
-    list.innerHTML = '<div class="empty-state">empty</div>';
+    list.innerHTML = '<div class="empty-state">No matching jobs</div>';
     renderJobDetail();
     return;
   }
@@ -2119,7 +2353,7 @@ const renderJobs = () => {
     `;
     const body = sectionEl.querySelector(".job-list-section-body");
     if (!section.jobs.length) {
-      body.innerHTML = '<div class="empty-state">empty</div>';
+      body.innerHTML = '<div class="empty-state">No jobs</div>';
     }
     section.jobs.forEach((j) => {
       const stage = jobStage(j);
@@ -2157,12 +2391,12 @@ const renderJobs = () => {
 const renderJobDetail = () => {
   if (!jobDetailPanel) return;
   if (!appState) {
-    jobDetailPanel.innerHTML = '<div class="empty-state">loading</div>';
+    jobDetailPanel.innerHTML = '<div class="empty-state">Loading job details…</div>';
     return;
   }
   const job = selectedJob();
   if (!job) {
-    jobDetailPanel.innerHTML = '<div class="empty-state">select a job</div>';
+    jobDetailPanel.innerHTML = '<div class="empty-state">Select a job to inspect its evidence and materials.</div>';
     return;
   }
   currentJobId = job.id;
@@ -2415,7 +2649,7 @@ const renderActivity = () => {
   events.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
 
   if (!events.length) {
-    container.innerHTML = '<div class="empty-state">empty</div>';
+    container.innerHTML = '<div class="empty-state">No recorded events</div>';
     return;
   }
 
@@ -2483,7 +2717,7 @@ const renderNetwork = () => {
     `;
   }
   if (!contacts.length && !notes.length) {
-    grid.innerHTML = '<div class="network-empty">empty</div>';
+    grid.innerHTML = '<div class="network-empty">No outreach records</div>';
     return;
   }
   const lanes = [
@@ -2519,7 +2753,7 @@ const renderNetwork = () => {
     `;
     const body = col.querySelector(".network-column-body");
     if (!lane.items.length) {
-      body.innerHTML = '<div class="empty-state">empty</div>';
+      body.innerHTML = '<div class="empty-state">No contacts</div>';
     }
     groupNetworkLaneItems(lane.items).forEach((group) => {
       body.appendChild(renderNetworkGroup(group));
@@ -2629,6 +2863,174 @@ const renderNetworkItem = (item) => {
   return card;
 };
 
+/* ── People ── */
+const personStatusLabel = (status) => ({
+  to_contact: "To contact",
+  contacted: "Contacted",
+  follow_up: "Follow up",
+  paused: "Paused",
+}[status] || humanize(status || "to_contact"));
+
+const setPeopleMessage = (message, kind = "") => {
+  if (!peopleMessage) return;
+  peopleMessage.textContent = message || "";
+  peopleMessage.className = `pipeline-message ${classToken(kind, ["ok", "pending", "error"])}`;
+  if (peopleMessageTimer) window.clearTimeout(peopleMessageTimer);
+  if (message) {
+    peopleMessageTimer = window.setTimeout(() => {
+      peopleMessage.textContent = "";
+      peopleMessage.className = "pipeline-message";
+    }, 3200);
+  }
+};
+
+const renderPeople = () => {
+  if (!appState || !peopleList) return;
+  const people = appState.people || [];
+  const counts = {
+    all: people.length,
+    to_contact: people.filter((person) => person.network_status === "to_contact").length,
+    follow_up: people.filter((person) => person.network_status === "follow_up").length,
+    contacted: people.filter((person) => person.network_status === "contacted").length,
+  };
+  if (peopleStats) {
+    peopleStats.innerHTML = [
+      ["People", counts.all],
+      ["To Contact", counts.to_contact],
+      ["Follow Up", counts.follow_up],
+      ["Contacted", counts.contacted],
+    ].map(([label, value]) => `
+      <div class="people-stat">
+        <span>${esc(label)}</span>
+        <strong>${fmtNum(value)}</strong>
+      </div>
+    `).join("");
+  }
+  const query = peopleQuery.trim().toLowerCase();
+  const filtered = people.filter((person) => {
+    const statusMatches = peopleStatusFilter === "all" || person.network_status === peopleStatusFilter;
+    const searchText = [
+      person.name,
+      person.company,
+      person.role,
+      person.email,
+      person.why_added,
+      person.notes,
+    ].filter(Boolean).join(" ").toLowerCase();
+    return statusMatches && (!query || searchText.includes(query));
+  });
+  if (!filtered.length) {
+    peopleList.innerHTML = `<div class="people-empty">${people.length ? "No matching people" : "No people saved yet"}</div>`;
+    return;
+  }
+  peopleList.innerHTML = filtered.map((person) => {
+    const status = classToken(person.network_status || "to_contact", ["to_contact", "contacted", "follow_up", "paused"]);
+    const linkedin = safeHref(person.linkedin_url || "");
+    const details = [person.role, person.company].filter(Boolean).join(" · ");
+    return `
+      <article class="person-row">
+        <div class="person-core">
+          <div class="person-title-line">
+            <strong>${esc(person.name || "Person")}</strong>
+            <span class="person-status ${status}">${esc(personStatusLabel(status))}</span>
+          </div>
+          ${details ? `<span class="person-meta">${esc(details)}</span>` : ""}
+          <p class="person-reason">${esc(person.why_added || "Reason not recorded")}</p>
+          ${person.notes ? `<p class="person-notes">${esc(person.notes)}</p>` : ""}
+        </div>
+        <div class="person-contact">
+          ${person.email ? `<a href="mailto:${esc(person.email)}">${esc(person.email)}</a>` : '<span class="person-missing">No email</span>'}
+          ${linkedin ? `<a href="${esc(linkedin)}" target="_blank" rel="noreferrer">LinkedIn</a>` : '<span class="person-missing">No LinkedIn</span>'}
+          <span>${esc(fmtDate(person.updated_at) || "")}</span>
+        </div>
+        <div class="person-actions">
+          <button class="link-button" type="button" data-person-edit="${esc(person.id)}">Edit</button>
+          <button class="link-button" type="button" data-person-prompt="${esc(person.id)}">Copy Prompt</button>
+        </div>
+      </article>
+    `;
+  }).join("");
+  peopleList.querySelectorAll("[data-person-edit]").forEach((button) => {
+    button.addEventListener("click", () => beginPeopleEdit(button.dataset.personEdit));
+  });
+  peopleList.querySelectorAll("[data-person-prompt]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const person = people.find((item) => item.id === button.dataset.personPrompt);
+      if (!person) return;
+      const prompt = [
+        `Use my JobApps People tracker entry for ${person.name}.`,
+        `Person ID: ${person.id}`,
+        person.company ? `Company: ${person.company}` : "",
+        person.role ? `Role: ${person.role}` : "",
+        person.email ? `Email: ${person.email}` : "Email: missing",
+        person.linkedin_url ? `LinkedIn: ${person.linkedin_url}` : "",
+        `Why I saved them: ${person.why_added || "not recorded"}`,
+        person.notes ? `Notes: ${person.notes}` : "",
+        "Help me decide the next networking step. Draft only and do not send anything.",
+      ].filter(Boolean).join("\n");
+      const copied = await copyText(prompt);
+      button.textContent = copied ? "Copied" : "Drafted";
+      window.setTimeout(() => { button.textContent = "Copy Prompt"; }, 1600);
+    });
+  });
+};
+
+const resetPeopleForm = () => {
+  if (!peopleForm) return;
+  peopleForm.reset();
+  $("#peopleId").value = "";
+  $("#peopleStatus").value = "to_contact";
+  if (peopleFormTitle) peopleFormTitle.textContent = "Add Person";
+  if (peopleFormCancel) peopleFormCancel.hidden = true;
+  if (peopleSave) peopleSave.textContent = "Save Person";
+};
+
+const beginPeopleEdit = (personId) => {
+  const person = (appState?.people || []).find((item) => item.id === personId);
+  if (!person || !peopleForm) return;
+  $("#peopleId").value = person.id || "";
+  $("#peopleName").value = person.name || "";
+  $("#peopleRole").value = person.role || "";
+  $("#peopleCompany").value = person.company || "";
+  $("#peopleLinkedin").value = person.linkedin_url || "";
+  $("#peopleEmail").value = person.email || "";
+  $("#peopleWhy").value = person.why_added || "";
+  $("#peopleNotes").value = person.notes || "";
+  $("#peopleStatus").value = person.network_status || "to_contact";
+  if (peopleFormTitle) peopleFormTitle.textContent = "Edit Person";
+  if (peopleFormCancel) peopleFormCancel.hidden = false;
+  if (peopleSave) peopleSave.textContent = "Update Person";
+  $("#peopleName").focus();
+};
+
+const savePerson = async () => {
+  if (!peopleForm || !peopleSave) return;
+  peopleSave.disabled = true;
+  setPeopleMessage("saving", "pending");
+  const payload = {
+    person_id: $("#peopleId").value.trim(),
+    name: $("#peopleName").value.trim(),
+    role: $("#peopleRole").value.trim(),
+    company: $("#peopleCompany").value.trim(),
+    linkedin_url: $("#peopleLinkedin").value.trim(),
+    email: $("#peopleEmail").value.trim(),
+    why_added: $("#peopleWhy").value.trim(),
+    notes: $("#peopleNotes").value.trim(),
+    status: $("#peopleStatus").value,
+    source: "cockpit",
+  };
+  try {
+    const result = await postJson("/api/tools/jobapps_upsert_person", payload);
+    if (result?.error) throw new Error(result.error);
+    await refreshStateQuietly({ render: false });
+    resetPeopleForm();
+    renderPeople();
+    setPeopleMessage(payload.person_id ? "person updated" : "person saved", "ok");
+  } finally {
+    peopleSave.disabled = false;
+  }
+};
+
 /* ── Criteria ── */
 const renderCriteria = () => {
   const grid = $("#criteriaGrid");
@@ -2639,18 +3041,23 @@ const renderCriteria = () => {
     criteria.forEach((c) => {
       const card = document.createElement("div");
       card.className = `criterion-card ${classToken(c.severity, ["blocker", "flag", "clear"])}`;
+      const rule = Array.isArray(c.patterns) && c.patterns.length
+        ? c.patterns.join(" · ")
+        : Number.isFinite(Number(c.threshold))
+          ? `${humanize(c.type || "threshold")} ${fmtNum(c.threshold)}`
+          : humanize(c.type || "rule");
       card.innerHTML = `
         <div class="criterion-head">
           <span class="criterion-area">${esc(c.area || "")}</span>
           <span class="criterion-severity ${classToken(c.severity, ["blocker", "flag", "clear"])}">${esc(c.severity || "flag")}</span>
         </div>
-        <div class="criterion-condition">${esc(c.condition || "")}</div>
+        <div class="criterion-condition">${esc(rule)}</div>
         <div class="criterion-action">${esc(c.action || "")}</div>
       `;
       grid.appendChild(card);
     });
   } else {
-    grid.innerHTML = '<div class="empty-state">empty</div>';
+    grid.innerHTML = '<div class="empty-state">No configured rules</div>';
   }
 };
 
@@ -3398,7 +3805,7 @@ const renderGeneratedMaterials = (items, groups = materialGroups(items)) => {
   if (!materialsList) return;
   materialsList.innerHTML = "";
   if (!items.length) {
-    materialsList.innerHTML = '<div class="empty-state">empty</div>';
+    materialsList.innerHTML = '<div class="empty-state">No saved materials</div>';
     return;
   }
   groups.forEach((group) => {
@@ -3659,7 +4066,7 @@ const renderSessions = () => {
     `;
   }
   if (!hermesSessions.length) {
-    sessionsList.innerHTML = '<div class="agent-session-empty">no sessions</div>';
+    sessionsList.innerHTML = '<div class="agent-session-empty">No Hermes sessions</div>';
     return;
   }
   hermesSessions.forEach((session) => {
@@ -3680,7 +4087,7 @@ const renderSessions = () => {
 };
 
 const refreshSessions = async () => {
-  if (sessionsList) sessionsList.innerHTML = '<div class="agent-session-empty">loading</div>';
+  if (sessionsList) sessionsList.innerHTML = '<div class="agent-session-empty">Loading sessions…</div>';
   const data = await fetchJson("/api/hermes/sessions");
   hermesSessions = data?.sessions || [];
   renderSessions();
@@ -3985,13 +4392,17 @@ const renderCurrentView = () => {
   captureDisclosureState();
   if (currentView === "dashboard") renderDashboard();
   if (currentView === "actions") renderActions();
-  if (currentView === "brain") renderBrain();
+  if (currentView === "brain") {
+    renderBrain();
+    loadBrainRecent().catch(() => {});
+  }
   if (currentView === "discovery") renderDiscovery();
   if (currentView === "jobs") renderJobs();
   if (currentView === "materials") renderMaterials();
   if (currentView === "activity") renderActivity();
   if (currentView === "criteria") renderCriteria();
   if (currentView === "network") renderNetwork();
+  if (currentView === "people") renderPeople();
   if (currentView === "sessions") renderSessions();
   restoreDisclosureState();
   restoreCurrentViewScrollState();
@@ -4037,11 +4448,12 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && materialViewer && !materialViewer.hidden) {
     closeMaterialViewer();
   }
+  if (event.key === "Escape") closeMobileNavigation();
 });
 if (brainSearch) {
   brainSearch.addEventListener("input", (event) => {
     brainQuery = event.target.value || "";
-    renderBrain();
+    queueBrainSearch();
   });
 }
 if (actionsSearch) {
@@ -4049,6 +4461,29 @@ if (actionsSearch) {
     actionsQuery = event.target.value || "";
     renderActions();
   });
+}
+if (peopleSearch) {
+  peopleSearch.addEventListener("input", (event) => {
+    peopleQuery = event.target.value || "";
+    renderPeople();
+  });
+}
+$$("[data-people-filter]").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    $$("[data-people-filter]").forEach((item) => item.classList.remove("active"));
+    chip.classList.add("active");
+    peopleStatusFilter = chip.dataset.peopleFilter || "all";
+    renderPeople();
+  });
+});
+if (peopleForm) {
+  peopleForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    savePerson().catch((err) => setPeopleMessage(err.message || "save failed", "error"));
+  });
+}
+if (peopleFormCancel) {
+  peopleFormCancel.addEventListener("click", resetPeopleForm);
 }
 $$("[data-action-filter]").forEach((chip) => {
   chip.addEventListener("click", () => {

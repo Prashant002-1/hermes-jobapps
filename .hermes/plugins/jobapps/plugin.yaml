@@ -1,7 +1,7 @@
 name: jobapps
-version: 0.1.0
+version: 0.2.0
 description: Exposes Hermes JobApps database tools, context injection, and workflow skill to native Hermes sessions.
-author: Prashant Shah
+author: JobApps maintainers
 kind: standalone
 provides_tools:
   - jobapps_brain_context
@@ -15,6 +15,9 @@ provides_tools:
   - jobapps_discover_jobs
   - jobapps_hydrate_job_url
   - jobapps_prepare_discovered_job
+  - jobapps_list_people
+  - jobapps_upsert_person
+  - jobapps_add_person_note
   - jobapps_find_people
   - jobapps_create_gmail_draft
   - jobapps_record_application_signal
@@ -30,6 +33,7 @@ provides_tools:
   - jobapps_record_research_note
   - jobapps_record_application_change
   - jobapps_record_learning_pattern
+  - jobapps_update_learning_pattern
   - jobapps_create_progress_item
   - jobapps_create_followup
   - jobapps_update_status
@@ -39,3 +43,5 @@ provides_hooks:
   - pre_llm_call
 provides_skills:
   - jobapps-cockpit
+  - jobapps-material-build-qa
+  - jobapps-material-quality-judge

@@ -11,7 +11,7 @@ from .typst import build_full_resume_typst
 
 def build_full_resume_tex(
     *,
-    name: str = "Applicant Name",
+    name: str = "Candidate Name",
     headline: str = "AI Engineer focused on agentic systems",
     sections: list[dict[str, Any]] | None = None,
 ) -> str:
@@ -25,7 +25,7 @@ def build_full_cover_letter_tex(
     body: str,
     company: str = "Hiring Team",
     role_title: str = "Target Role",
-    name: str = "Applicant Name",
+    name: str = "Candidate Name",
 ) -> str:
     """Build a send-reviewable LaTeX cover-letter artifact from explicit body text."""
 

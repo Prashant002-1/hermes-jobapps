@@ -284,9 +284,34 @@ def extract_job_facts(job: dict[str, Any], combined: str, config: dict[str, Any]
     else:
         location_risk = "unknown"
 
-    # Seniority
-    seniority_evidence = find_evidence_sentence(combined, ("senior", "staff", "principal", "lead", "years", "new grad", "intern"))
-    years_required = [int(value) for value in re.findall(r"\b([3-9]|1[0-5])\+?\s+years\b", lowered)]
+    # Seniority must come from the role itself. User notes often contain recruiter,
+    # manager, or executive titles that are not requirements for the opening.
+    seniority_text = normalize_space(
+        " ".join(str(job.get(key, "")) for key in ("title", "description"))
+    )
+    seniority_lowered = seniority_text.lower()
+    title_lowered = normalize_space(str(job.get("title") or "")).lower()
+    seniority_evidence = find_evidence_sentence(
+        seniority_text,
+        (
+            "senior",
+            "staff",
+            "principal",
+            "lead",
+            "years",
+            "new grad",
+            "entry level",
+            "early-career",
+            "early career",
+            "recent graduate",
+            "intern",
+            "junior",
+        ),
+    )
+    years_required = [
+        int(value)
+        for value in re.findall(r"\b([3-9]|1[0-5])\+?\s+years\b", seniority_lowered)
+    ]
     years_threshold = _criteria_threshold(criteria_list, "seniority", "years")
     if years_threshold is None:
         years_threshold = 5
@@ -295,13 +320,25 @@ def extract_job_facts(job: dict[str, Any], combined: str, config: dict[str, Any]
     if not seniority_blocker_titles:
         seniority_blocker_titles = ["staff engineer", "principal engineer", "director"]
 
-    if any(term in lowered for term in seniority_blocker_titles):
+    early_career_terms = (
+        "new grad",
+        "entry level",
+        "early-career",
+        "early career",
+        "recent graduate",
+        "internship or academic project",
+        "internship, academic project",
+        "junior",
+        "associate",
+    )
+
+    if any(term in title_lowered for term in seniority_blocker_titles):
         seniority_risk = "blocker"
     elif years_required and max(years_required) >= years_threshold:
         seniority_risk = "blocker"
     elif years_required and max(years_required) >= 3:
         seniority_risk = "stretch"
-    elif any(term in lowered for term in ("new grad", "entry level", "intern", "junior", "associate")):
+    elif any(term in seniority_lowered for term in early_career_terms):
         seniority_risk = "clear"
     else:
         seniority_risk = "unknown"
@@ -500,7 +537,7 @@ def collect_risks(facts: dict[str, Any], combined: str) -> list[str]:
     if high_salary_start:
         risks.append("$120k+ starting salary is a competition signal, not an automatic priority.")
     if high_salary_start and west_coast:
-        risks.append("High-pay West Coast role: treat as highly competitive and prioritize networking before deep tailoring.")
+        risks.append("High-pay West Coast role: confirm relocation expectations and use focused networking before deep tailoring.")
     if facts["seniority_risk"] == "stretch":
         risks.append("Seniority may be a stretch. Use the strongest matching proof point and avoid overclaiming.")
     if facts["effort_risk"] == "heavy":

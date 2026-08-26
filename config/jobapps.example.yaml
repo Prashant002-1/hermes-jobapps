@@ -104,8 +104,13 @@ writing:
   cover_letter_words: [350, 400]
   resume_format: tex
   cover_letter_format: tex
+  material_quality_gate: true
+  pause_on_missing_throughline: true
+  no_jd_regurgitation: true
   no_generic_enthusiasm: true
   no_resume_regurgitation: true
+  no_spec_sheet_bullets: true
+  no_polished_hollow_materials: true
   no_padding_metrics: true
 
 followups:

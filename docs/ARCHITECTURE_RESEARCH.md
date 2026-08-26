@@ -38,7 +38,7 @@ cards, reasoning/status visibility, and run/event correlation.
 
 Provider runtime resolution belongs to Hermes. JobApps should configure the Hermes API/profile and let Hermes choose the actual provider/model path. Source: https://hermes-agent.nousresearch.com/docs/developer-guide/provider-runtime
 
-Hermes plugins are the immediate way to expose app database tools and a JobApps skill to native Hermes sessions. A future MCP bridge can replace or complement the project plugin if JobApps becomes a separate service. Sources: https://hermes-agent.nousresearch.com/docs/guides/build-a-hermes-plugin and https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp
+Hermes plugins are the immediate way to expose app database tools and a JobApps skill to native Hermes sessions. Other agents should use a documented CLI or HTTP/API wrapper over the same repository contract. This keeps the domain layer independent of any agent host without adding another protocol server. Source: https://hermes-agent.nousresearch.com/docs/guides/build-a-hermes-plugin
 
 The Hermes repo confirms the docs: tools register through plugin contexts, prompt/context files are loaded as part of agent setup, sessions persist through Hermes state, and gateway/API are long-running entry points. Source: https://github.com/NousResearch/hermes-agent
 
@@ -56,7 +56,7 @@ The first implementation is a dependency-free Python local server:
 - `.hermes/plugins/jobapps/` exposes the same app tools and context to native Hermes.
 - `web/` exposes the cockpit and Hermes chat.
 
-This is not an LLM replacement. It gives Hermes a durable state/tool contract and gives the applicant a useful cockpit.
+This is not an LLM replacement. It gives Hermes a durable state/tool contract and gives the user a useful cockpit.
 
 The personal memory layer also stays inside this implementation. JobApps now uses `brain_entities` and `brain_events` in SQLite for the human trail: conversations, corrections, constraints, preferences, people, companies, decisions, networking history, and why materials changed. This borrows the useful personal-brain pattern of canonical entities plus an event timeline, without adding an MCP server, GBrain dependency, or separate markdown wiki runtime.
 
@@ -79,13 +79,16 @@ Hermes should be able to call tools for:
 
 Tooling must be visible, inspectable, and safe. State-changing JobApps tools write to the app database. Native Hermes tools handle general writing/editing/compilation. External actions remain out of scope until explicit approval and preview workflows exist.
 
-## Future Adapter Boundary
+## Agent-Agnostic Adapter Boundary
 
-If JobApps becomes a separate service, expose the same tool contract over MCP:
+The repository owns domain behavior. Typed JSON-schema tool specs describe the operations. Hermes registers those specs through its project plugin, while Codex or another agent can call the existing `POST /api/tools/<tool_name>` HTTP wrapper. A later CLI may wrap the same toolbox when repeated terminal use justifies it.
 
 ```json
 {
   "tools": [
+    "jobapps_list_people",
+    "jobapps_upsert_person",
+    "jobapps_add_person_note",
     "jobapps_brain_context",
     "jobapps_retrieve_for_job",
     "jobapps_upsert_profile_fact",
@@ -97,7 +100,7 @@ If JobApps becomes a separate service, expose the same tool contract over MCP:
 }
 ```
 
-Hermes would then use MCP instead of importing the Python package from a project plugin. The database boundary and workflow contract stay the same.
+Do not duplicate contact logic inside an agent adapter. Do not add an MCP server for this boundary. The database methods, tool schemas, and HTTP wrapper remain the shared contract.
 
 ## Expansion Gates
 
