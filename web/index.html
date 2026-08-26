@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JobApps — Hermes</title>
+  <title>JobApps · Hermes</title>
   <link rel="stylesheet" href="/design-system/TOKENS.css">
   <link rel="stylesheet" href="/static/styles.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'><rect x='1' y='6' width='3' height='16' rx='1.5' fill='%23c45a00'/><rect x='7' y='9' width='3' height='13' rx='1.5' fill='%23b72301'/><rect x='13' y='3' width='3' height='22' rx='1.5' fill='%23b72301'/><rect x='19' y='7' width='3' height='15' rx='1.5' fill='%23c45a00'/><rect x='25' y='10' width='3' height='13' rx='1.5' fill='%23c45a00'/></svg>">
@@ -11,6 +11,9 @@
 <body>
   <header class="bar" id="bar">
     <div class="bar-left">
+      <button class="nav-toggle" id="navToggle" type="button" aria-controls="navRail" aria-expanded="true" title="Collapse sidebar">
+        <span class="material-symbols-outlined" id="navToggleIcon">left_panel_close</span>
+      </button>
       <div class="bar-logo" aria-hidden="true">
         <svg viewBox="0 0 28 28" fill="none">
           <rect x="1" y="6" width="3" height="16" rx="1.5"/>
@@ -26,7 +29,9 @@
       </div>
     </div>
     <div class="bar-center">
-      <img class="bar-brand-mark" src="/assets/hermes-jobapps-mark.svg" alt="Hermes JobApps">
+      <span class="bar-breadcrumb">Workspace</span>
+      <span class="bar-breadcrumb-separator">/</span>
+      <strong id="barViewTitle">State</strong>
     </div>
     <div class="bar-right">
       <span class="bar-status" id="barStatus">connected</span>
@@ -36,6 +41,7 @@
 
   <div class="app">
     <nav class="nav-rail" id="navRail">
+      <span class="nav-section-label">Workspace</span>
       <button class="nav-item active" data-view="dashboard" title="State" aria-label="State">
         <span class="material-symbols-outlined nav-icon">monitoring</span>
         <span class="nav-label">State</span>
@@ -62,10 +68,15 @@
       </button>
 
       <div class="nav-divider"></div>
+      <span class="nav-section-label">Relationships</span>
 
       <button class="nav-item" data-view="network" title="Network" aria-label="Network">
         <span class="material-symbols-outlined nav-icon">hub</span>
         <span class="nav-label">Network</span>
+      </button>
+      <button class="nav-item" data-view="people" title="People" aria-label="People">
+        <span class="material-symbols-outlined nav-icon">group</span>
+        <span class="nav-label">People</span>
       </button>
       <button class="nav-item" data-view="activity" title="Events" aria-label="Events">
         <span class="material-symbols-outlined nav-icon">timeline</span>
@@ -78,11 +89,14 @@
 
       <div class="nav-spacer"></div>
 
+      <span class="nav-section-label">Hermes</span>
       <button class="nav-item" data-view="sessions" title="Sessions" aria-label="Sessions">
         <span class="material-symbols-outlined nav-icon">history</span>
         <span class="nav-label">Sessions</span>
       </button>
     </nav>
+
+    <button class="nav-backdrop" id="navBackdrop" type="button" aria-label="Close navigation" tabindex="-1"></button>
 
     <main class="stage" id="stage">
       <!-- ═══════════════ Dashboard ═══════════════ -->
@@ -202,10 +216,13 @@
       <section class="view" id="view-brain" data-view="brain">
         <header class="view-header brain-header">
           <div class="view-header-main">
-            <span class="eyebrow">Memory</span>
+            <span class="eyebrow">Career Memory</span>
             <h1>Brain</h1>
           </div>
-          <input type="text" class="input brain-search" id="brainSearch" placeholder="Filter memory">
+          <div class="brain-query">
+            <input type="search" class="input brain-search" id="brainSearch" placeholder="Search the career brain" autocomplete="off">
+            <span class="brain-query-status" id="brainQueryStatus" aria-live="polite"></span>
+          </div>
         </header>
         <div class="stat-strip" id="brainStats"></div>
         <div class="brain-toolbar">
@@ -216,8 +233,11 @@
           <div class="brain-area-list" id="brainAreaList"></div>
         </div>
         <section class="brain-ledger">
-          <div class="section-head">
-            <h2>Memory Ledger</h2>
+          <div class="section-head brain-ledger-head">
+            <div>
+              <h2 id="brainLedgerTitle">Recent Memory</h2>
+              <p class="brain-ledger-note" id="brainLedgerNote">Latest recorded context</p>
+            </div>
             <span class="count" id="brainEventCount">0</span>
           </div>
           <div class="brain-list" id="brainList"></div>
@@ -329,13 +349,77 @@
       <section class="view" id="view-network" data-view="network">
         <header class="view-header">
           <div class="view-header-main">
-            <span class="eyebrow">People</span>
+            <span class="eyebrow">Job Outreach</span>
             <h1>Network</h1>
           </div>
         </header>
         <div class="stat-strip" id="networkStats"></div>
         <div class="network-board" id="networkGrid">
           <div class="empty-state">No contacts yet</div>
+        </div>
+      </section>
+
+      <!-- ═══════════════ People ═══════════════ -->
+      <section class="view" id="view-people" data-view="people">
+        <header class="view-header people-header">
+          <div class="view-header-main">
+            <span class="eyebrow">Personal Network</span>
+            <h1>People</h1>
+          </div>
+          <span class="pipeline-message" id="peopleMessage" aria-live="polite"></span>
+        </header>
+        <div class="stat-strip" id="peopleStats"></div>
+        <div class="people-layout">
+          <section class="people-main" aria-label="Saved people">
+            <div class="toolbar people-toolbar">
+              <input type="search" class="input" id="peopleSearch" placeholder="Filter people">
+              <div class="filter-bar" id="peopleFilters">
+                <button class="chip active" type="button" data-people-filter="all">All</button>
+                <button class="chip" type="button" data-people-filter="to_contact">To Contact</button>
+                <button class="chip" type="button" data-people-filter="follow_up">Follow Up</button>
+                <button class="chip" type="button" data-people-filter="contacted">Contacted</button>
+                <button class="chip" type="button" data-people-filter="paused">Paused</button>
+              </div>
+            </div>
+            <div class="people-list" id="peopleList"></div>
+          </section>
+          <aside class="people-entry" aria-label="Add or edit a person">
+            <form id="peopleForm" class="people-form">
+              <div class="section-head people-form-head">
+                <h2 id="peopleFormTitle">Add Person</h2>
+                <button class="link-button" type="button" id="peopleFormCancel" hidden>Cancel Edit</button>
+              </div>
+              <input type="hidden" id="peopleId">
+              <label class="field-label" for="peopleName">Name</label>
+              <input class="input" id="peopleName" name="name" autocomplete="name" required>
+              <div class="people-field-row">
+                <div>
+                  <label class="field-label" for="peopleRole">Role</label>
+                  <input class="input" id="peopleRole" name="role">
+                </div>
+                <div>
+                  <label class="field-label" for="peopleCompany">Company</label>
+                  <input class="input" id="peopleCompany" name="company" autocomplete="organization">
+                </div>
+              </div>
+              <label class="field-label" for="peopleLinkedin">LinkedIn</label>
+              <input class="input" type="url" id="peopleLinkedin" name="linkedin_url" placeholder="https://www.linkedin.com/in/...">
+              <label class="field-label" for="peopleEmail">Email</label>
+              <input class="input" type="email" id="peopleEmail" name="email" autocomplete="email">
+              <label class="field-label" for="peopleWhy">Why add them?</label>
+              <textarea class="input people-textarea" id="peopleWhy" name="why_added" rows="3" required></textarea>
+              <label class="field-label" for="peopleNotes">Notes</label>
+              <textarea class="input people-textarea" id="peopleNotes" name="notes" rows="3"></textarea>
+              <label class="field-label" for="peopleStatus">Status</label>
+              <select class="input" id="peopleStatus" name="status">
+                <option value="to_contact">To contact</option>
+                <option value="follow_up">Follow up</option>
+                <option value="contacted">Contacted</option>
+                <option value="paused">Paused</option>
+              </select>
+              <button class="btn btn-primary people-save" type="submit" id="peopleSave">Save Person</button>
+            </form>
+          </aside>
         </div>
       </section>
 

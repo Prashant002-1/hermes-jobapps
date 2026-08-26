@@ -6,6 +6,7 @@ Hermes JobApps is designed to be public code with private runtime data.
 
 - SQLite databases, WAL files, or backups
 - generated resumes, cover letters, PDFs, TeX builds, or exports
+- generated previews, render scratch files, or `work/` output
 - real applicant profile imports
 - application history or contact lists
 - personal target-role rules, writing voice rules, proof-point preferences, outreach habits, or private plugin skills

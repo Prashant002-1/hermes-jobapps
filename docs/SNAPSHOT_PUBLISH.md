@@ -35,6 +35,11 @@ COMMIT=$(printf 'Public snapshot: <title>\n' | git commit-tree "$TREE" -p "$PARE
 git push public "$COMMIT":refs/heads/main
 ```
 
+For a substantive update that should receive normal review, create the sanitized
+snapshot commit on a branch based on `public/main`, push that branch, open a PR,
+and merge it after tests and privacy checks pass. The PR must contain only the
+curated public tree; do not merge private history into the public branch.
+
 ## Rules
 
 - Publish the sanitized tree, not the private working tree.
@@ -42,3 +47,6 @@ git push public "$COMMIT":refs/heads/main
 - Do not use `git commit` for the snapshot commit if you want a clean commit without tool trailers.
 - Fetch the public remote before future publishes.
 - Run the privacy audit before every push.
+- Audit the reachable public history separately from the current tree. Removing
+  sensitive data from history requires an explicitly coordinated history reset;
+  a normal PR cannot purge older commits.

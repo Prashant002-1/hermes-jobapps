@@ -9,6 +9,33 @@
     ],
     "timeout_seconds": 60
   },
+  "resume_qa": {
+    "required": true,
+    "required_pages": 1,
+    "required_body_font": "Avenir Next",
+    "minimum_body_font_size_pt": 10,
+    "page_width_pt": 612,
+    "page_height_pt": 792,
+    "page_size_tolerance_pt": 2,
+    "bounds_tolerance_pt": 0.5,
+    "minimum_collision_pt": 2,
+    "collision_relative_factor": 2,
+    "minimum_collision_height_ratio": 0.2,
+    "minimum_text_gap_pt": 1,
+    "maximum_intra_item_leading_factor": 1.35,
+    "minimum_intra_item_leading_delta_pt": 2,
+    "maximum_inter_item_gap_factor": 1.8,
+    "minimum_inter_item_gap_delta_pt": 2,
+    "short_final_line_max_words": 2,
+    "short_final_line_max_width_ratio": 0.25,
+    "bottom_whitespace_target_in": 0.65,
+    "bottom_whitespace_tolerance_in": 0.10,
+    "maximum_internal_to_section_gap_ratio": 0.8,
+    "semantic_heading_tolerance_pt": 4,
+    "right_margin_pt": 24,
+    "max_repair_iterations": 3,
+    "timeout_seconds": 30
+  },
   "latex": {
     "compiler_order": ["tectonic", "latexmk", "xelatex", "pdflatex"],
     "compiler_paths": [

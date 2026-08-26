@@ -4,7 +4,7 @@
    ========================================================================== */
 
 /* ── Font imports ─────────────────────────────────────────────────────── */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400..700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
 
 :root {
@@ -24,8 +24,8 @@
   /* Text — obsidian, warm */
   --text:                      #1c1b1b;
   --text-secondary:            #4a4745;
-  --text-tertiary:             #8a8580;
-  --text-disabled:             #b5b0ab;
+  --text-tertiary:             #6f6965;
+  --text-disabled:             #a19b96;
 
   /* Primary accent — Safety Orange */
   --accent:                    #b72301;
@@ -34,9 +34,9 @@
   --accent-container:          #d42a00;
 
   /* Secondary accent — Warm Amber */
-  --gold:                      #c45a00;
-  --gold-dim:                  rgba(196, 90, 0, 0.08);
-  --gold-glow:                 rgba(196, 90, 0, 0.15);
+  --gold:                      #bd5400;
+  --gold-dim:                  rgba(189, 84, 0, 0.08);
+  --gold-glow:                 rgba(189, 84, 0, 0.15);
   --gold-container:            #a34a00;
 
   /* Semantic */
@@ -44,8 +44,8 @@
   --good-dim:                  rgba(26, 122, 62, 0.08);
   --bad:                       #b72301;
   --bad-dim:                   rgba(183, 35, 1, 0.08);
-  --warn:                      #c45a00;
-  --warn-dim:                  rgba(196, 90, 0, 0.08);
+  --warn:                      #bd5400;
+  --warn-dim:                  rgba(189, 84, 0, 0.08);
 
   /* Borders and outlines */
   --border:                    rgba(28, 27, 27, 0.10);
@@ -56,11 +56,9 @@
 
   /* ── Typography ─────────────────────────────────────────────────────── */
 
-  --font-display:              "Space Grotesk", system-ui, -apple-system,
-                               BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-sans:                 "Space Grotesk", system-ui, -apple-system,
-                               BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono:                 "Space Grotesk", ui-monospace, monospace;
+  --font-display:              "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-sans:                 "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-mono:                 "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
   --font-symbols:              "Material Symbols Outlined";
 
   --text-xs:                   10px;
@@ -95,6 +93,7 @@
 
   --header-h:  56px;
   --nav-w:     220px;
+  --nav-w-collapsed: 52px;
 
   /* ── Radii (Technical Brutalism) ────────────────────────────────────── */
 
@@ -116,13 +115,13 @@
   --lamp-amber: 0 0 8px 1px rgba(196, 90, 0, 0.35);
   --lamp-teal:  0 0 12px 2px rgba(26, 122, 62, 0.25);
 
-  /* ── Shadows (disabled — hard borders preferred) ────────────────────── */
+  /* ── Shadows (hard borders preferred) ───────────────────────────────── */
 
   --shadow-ambient: none;
   --shadow-card:    none;
   --shadow-glow:    none;
 
-  /* ── Noise texture (SVG feTurbulence) ───────────────────────────────── */
+  /* ── Noise texture ──────────────────────────────────────────────────── */
   --noise-svg: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
 }
 
@@ -180,7 +179,7 @@ a:hover { text-decoration: underline; }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 0px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
 
 /* ── Animations ───────────────────────────────────────────────────────── */
@@ -203,4 +202,13 @@ a:hover { text-decoration: underline; }
 @keyframes breathe {
   0%, 100% { opacity: 0.5; }
   50%      { opacity: 0.9; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
 }

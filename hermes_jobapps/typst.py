@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .latex import verify_pdf
+from .resume_qa import TYPST_QA_PRELUDE, verify_resume_pdf
 
 
 def typst_escape(value: str) -> str:
@@ -68,10 +69,10 @@ def build_resume_typst(job: dict[str, Any], evaluation: dict[str, Any], drafts: 
   personal-info-font-size: 9.3pt,
   author-position: center,
   personal-info-position: center,
-  author-name: "Applicant Name",
-  email: "applicant@example.com",
-  linkedin-user-id: "applicant",
-  github-username: "applicant",
+  author-name: "Candidate Name",
+  email: "candidate@example.com",
+  linkedin-user-id: "candidate",
+  github-username: "candidate",
 )
 
 #custom-title({typst_string(f"Resume Notes: {title} at {company}")})[
@@ -90,52 +91,69 @@ def build_resume_typst(job: dict[str, Any], evaluation: dict[str, Any], drafts: 
 
 def build_full_resume_typst(
     *,
-    name: str = "Applicant Name",
+    name: str = "Candidate Name",
     headline: str = "AI Engineer focused on agentic systems",
     sections: list[dict[str, Any]] | None = None,
 ) -> str:
     """Build a compact full-resume Typst artifact from explicit sections."""
 
     section_blocks: list[str] = []
-    for section in sections or []:
+    for section_index, section in enumerate(sections or [], start=1):
         title = str(section.get("title") or "Section")
+        section_id = f"{_semantic_id(title)}-{section_index}"
         raw_items = section.get("items") or []
         if isinstance(raw_items, str):
             raw_items = [raw_items]
-        items = "\n".join(f"  - {typst_escape(str(item))}" for item in raw_items if str(item).strip())
+        items = "\n".join(
+            f'  - #qa-region("bullet", "{section_id}-bullet-{item_index}")[{typst_escape(str(item))}]'
+            for item_index, item in enumerate(raw_items, start=1)
+            if str(item).strip()
+        )
         if not items:
             continue
-        section_blocks.append(f"#custom-title({typst_string(title)})[\n{items}\n]")
+        section_blocks.append(
+            f'#qa-region("section", "{section_id}")[\n'
+            f"#custom-title({typst_string(title)})[\n{items}\n]\n"
+            "#v(0.40em)\n"
+            "]"
+        )
     if not section_blocks:
         section_blocks.append(
+            '#qa-region("section", "review-notes-1")[\n'
             "#custom-title(\"Review Notes\")[\n"
-            "  - Add user-confirmed projects, experience, education, and skills before external use.\n"
-            "]"
+            '  - #qa-region("bullet", "review-notes-1-bullet-1")[Add user-confirmed projects, experience, education, and skills before external use.]\n'
+            "]\n]"
         )
 
     return f"""#import "@preview/simple-technical-resume:0.1.1": *
 
+{TYPST_QA_PRELUDE}
 #show: resume.with(
   paper: "us-letter",
   top-margin: 0.32in,
   bottom-margin: 0.18in,
   left-margin: 0.42in,
   right-margin: 0.42in,
-  font: "New Computer Modern",
-  font-size: 9.65pt,
+  font: "Avenir Next",
+  font-size: 10pt,
   personal-info-font-size: 9.3pt,
   author-position: center,
   personal-info-position: center,
   author-name: {typst_string(name)},
-  email: "applicant@example.com",
-  linkedin-user-id: "applicant",
-  github-username: "applicant",
+  email: "candidate@example.com",
+  linkedin-user-id: "candidate",
+  github-username: "candidate",
 )
 
 #align(center)[{typst_escape(headline)}]
 
 {chr(10).join(section_blocks)}
 """
+
+
+def _semantic_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return normalized or "section"
 
 
 def compile_typst_to_pdf(
@@ -204,16 +222,38 @@ def compile_typst_to_pdf(
             "next_step": "Review the Typst source or increase the compile timeout.",
         }
 
-    ok = completed.returncode == 0 and built_pdf_path.exists()
+    rendered = completed.returncode == 0 and built_pdf_path.exists()
     verification: dict[str, Any] = {"status": "not_run"}
-    if ok:
+    layout_verification: dict[str, Any] = {"status": "not_run", "ready": False}
+    if rendered:
         shutil.copy2(built_pdf_path, final_pdf_path)
         verification = verify_pdf(final_pdf_path, config=config)
+        layout_verification = verify_resume_pdf(
+            final_pdf_path,
+            config=config,
+            source_path=source,
+            typst_compiler=compiler,
+            typst_env=_compile_env(search_paths, compiler),
+        )
+        verification["layout"] = layout_verification
+    resume_qa_config = config.get("resume_qa", {}) if isinstance(config.get("resume_qa", {}), dict) else {}
+    integrity_errors = _pdf_integrity_errors(verification, resume_qa_config) if rendered else ["pdf_not_rendered"]
+    verification["integrity_errors"] = integrity_errors
+    layout_required = bool(resume_qa_config.get("required", True))
+    layout_ready = bool(layout_verification.get("ready"))
+    ok = rendered and not integrity_errors and (layout_ready or not layout_required)
+    if not rendered:
+        status = "compile_failed"
+    elif ok:
+        status = "compiled"
+    else:
+        status = "verification_failed"
     if clean_build_dir:
         shutil.rmtree(build_dir, ignore_errors=True)
     return {
         "ok": ok,
-        "status": "compiled" if ok else "compile_failed",
+        "rendered": rendered,
+        "status": status,
         "source_path": str(source),
         "typst_path": str(source),
         "pdf_path": str(final_pdf_path) if final_pdf_path.exists() else "",
@@ -224,7 +264,13 @@ def compile_typst_to_pdf(
         "stdout": completed.stdout[-6000:],
         "stderr": completed.stderr[-6000:],
         "verification": verification,
-        "next_step": "PDF compiled, copied beside the Typst source, and verified." if ok else "Open the compile errors, patch the Typst, and compile again.",
+        "next_step": (
+            "PDF compiled, copied beside the Typst source, and passed deterministic layout QA."
+            if ok
+            else "Apply verification.layout.repair_plan, recompile, and stop after resume_qa.max_repair_iterations if defects remain."
+            if rendered
+            else "Open the compile errors, patch the Typst, and compile again."
+        ),
     }
 
 
@@ -250,6 +296,26 @@ def _typst_search_paths(typst_config: dict[str, Any], config: dict[str, Any]) ->
     for item in os.environ.get("PATH", "").split(os.pathsep):
         _append_path(paths, item)
     return paths
+
+
+def _pdf_integrity_errors(verification: dict[str, Any], settings: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if verification.get("status") != "checked":
+        errors.append(f"verification_status:{verification.get('status')}")
+    if verification.get("pdfinfo_exit") != 0:
+        errors.append("pdfinfo_failed")
+    if verification.get("pdftotext_exit") != 0:
+        errors.append("pdftotext_failed")
+    required_pages = int(settings.get("required_pages", 1))
+    if verification.get("pages") != required_pages:
+        errors.append(f"page_count:{verification.get('pages')}")
+    minimum_words = int(settings.get("minimum_exported_words", 1))
+    word_count = verification.get("word_count")
+    if not isinstance(word_count, int) or word_count < minimum_words:
+        errors.append(f"word_count:{word_count}")
+    if verification.get("contamination"):
+        errors.append("contamination_detected")
+    return errors
 
 
 def _append_path(paths: list[str], value: str | Path) -> None:

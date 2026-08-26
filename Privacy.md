@@ -14,6 +14,7 @@ These files are private runtime data:
 - `private/`
 - `exports/`
 - `materials/`
+- `work/`
 - generated `.tex`, `.pdf`, `.docx`, or resume/cover-letter variants
 - `.env` and `.env.*`
 - `*.db`, `*.sqlite`, `*.sqlite3`, and SQLite WAL/SHM sidecar files

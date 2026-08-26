@@ -45,7 +45,18 @@ class HermesRunManager:
                 return record
 
             record = self.repo.get_job(job_id)
-            prompt = build_opportunity_prompt(record["job"], self.repo.career_context(), record["evaluation"])
+            retrieval = self.repo.retrieve_for_job(job_id, use="resume", limit=12)
+            prompt_context = {
+                "profile_facts": retrieval.get("profile_facts", []),
+                "proof_points": [item["source"] for item in retrieval.get("evidence", [])],
+                "learning_patterns": retrieval.get("learning_patterns", []),
+                "context_policy": {
+                    "evidence": "job_relevant_active_verified_packet",
+                    "learning_patterns": "current_exact_use_policy",
+                    "historical_brain_events": "excluded",
+                },
+            }
+            prompt = build_opportunity_prompt(record["job"], prompt_context, record["evaluation"])
             prompt_record = self.repo.save_prompt_build(
                 "opportunity_research_tailor",
                 prompt,

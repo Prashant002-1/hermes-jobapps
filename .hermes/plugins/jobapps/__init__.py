@@ -66,6 +66,10 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
         "cover letter",
         "company",
         "networking",
+        "person",
+        "people",
+        "contact",
+        "linkedin",
         "follow-up",
         "followup",
         "outreach",
@@ -74,7 +78,7 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
     boundary = (
         "Use native Hermes file/search/patch/terminal tools for material writing, editing, diffing, "
         "Typst/TeX compilation, and QA. Use JobApps tools only for targeted retrieval and durable "
-        "app-state ledger records such as jobs, proof points, material links/provenance, contacts, "
+        "app-state ledger records such as jobs, proof points, material links/provenance, personal people, contacts, "
         "follow-ups, status, and external-action approvals."
     )
     if not triggered:
@@ -95,6 +99,7 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
             f"Career-brain entities: {context_counts.get('brain_entities', 0)}; career-brain events: {context_counts.get('brain_events', 0)}.",
             f"Discovery candidates: {discovery_counts.get('total', 0)}; ready={discovery_counts.get('ready', 0)}; needs_review={discovery_counts.get('needs_review', 0)}.",
             f"Cached contacts: {context_counts.get('contacts', 0)}.",
+            f"Personal People tracker: {context_counts.get('people', 0)}.",
         ]
         if recent_jobs:
             lines.append("Recent opportunities:")
@@ -104,7 +109,7 @@ def _inject_jobapps_context(user_message: str = "", is_first_turn: bool = False,
                 status = job.get("status") or "saved"
                 decision = job.get("decision") or "review"
                 lines.append(f"- {job.get('id')}: {title} at {company}; status={status}; decision={decision}")
-        lines.append("Use jobapps_prepare_opportunity for intake/evaluation only; it does not author candidate-facing materials. Use jobapps_start_material_prep only when the applicant wants background Hermes material-prep runs for existing jobs. Discovery candidates must be promoted before tailoring. For networking, use jobapps_find_people to cache public contacts and jobapps_create_gmail_draft only for drafts; never send email.")
+        lines.append("Use jobapps_prepare_opportunity for intake/evaluation only; it does not author candidate-facing materials. Use jobapps_start_material_prep only when the user wants background Hermes material-prep runs for existing jobs. Discovery candidates must be promoted before tailoring. Personal People entries are explicit: read with jobapps_list_people and save only on request with jobapps_upsert_person. For job contact research, use jobapps_find_people to cache public contacts. jobapps_create_gmail_draft creates drafts only; never send email.")
         return {"context": "\n".join(lines)}
     except Exception as exc:
         return {"context": f"JobApps context bridge failed: {exc}"}

@@ -75,10 +75,10 @@ Turn a job link or description into blocker preflight, JD-grounded tailoring req
 
 6. **Choose the angle**
    - One central story, not a trophy list.
-   - For data roles: nonprofit data platform, validation, PostgreSQL, analysis, reporting, research rigor.
-   - For backend/full-stack: reliable operational systems, APIs, auth/proxy work, and database-backed workflows.
-   - For software engineering roles: production enterprise components, APIs, auth/proxy work, SQL-backed systems, TypeScript/React where relevant.
-   - For AI/agent roles: Personal Canvas Agent, agentic development, RAG, evaluation, tool-use, applied LLM systems.
+   - For data roles: confirmed data-platform, validation, database, analysis, reporting, and research proof.
+   - For backend/full-stack: confirmed operational systems, API, auth, and database-backed workflow proof.
+   - For software engineering roles: confirmed production components, APIs, SQL-backed systems, and frontend proof where relevant.
+   - For AI/agent roles: confirmed agent, retrieval, evaluation, tool-use, and applied-LLM proof.
 
 ## Output Shape
 
@@ -131,7 +131,7 @@ progress_items:
 
 - Do not fit-score the applicant or produce a generic match grade.
 - Do not use `maybe`, match grades, risk levels, gap language, or fake numeric scoring. The decision vocabulary is `apply`, `skip`, or `pending`.
-- Do not punish him for missing nice-to-haves if the role has no hard blocker.
+- Do not punish the applicant for missing nice-to-haves if the role has no hard blocker.
 - Always separate blocker, risk, and missing story.
 - If sponsorship is unknown, mark it unknown and recommend quick research before deep tailoring.
 - If sponsorship is blocked, skip quickly and move on.

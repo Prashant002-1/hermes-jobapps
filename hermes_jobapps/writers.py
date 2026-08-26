@@ -80,15 +80,15 @@ def _resume_notes(
     learning_patterns: list[dict[str, Any]],
 ) -> list[str]:
     section_order = {
-        "ai_agent_systems": "Education, Research, Projects, Experience, Skills",
-        "ml_ds": "Education, Research, Projects, Experience, Skills",
-        "research": "Education, Research, Projects, Experience, Skills",
-        "data_engineering": "Education, Experience, Projects/Research, Skills",
-        "data_analytics": "Education, Experience, Projects/Research, Skills",
-        "full_stack": "Education, Experience, Projects, Research, Skills",
-        "backend": "Education, Experience, Projects, Research, Skills",
-        "mobile_ios": "Education, Projects, Experience, Skills",
-    }.get(role_family, "Education, Experience, Projects/Research, Skills")
+        "ai_agent_systems": "Experience, Research, Education, Projects, Skills",
+        "ml_ds": "Experience, Research, Education, Projects, Skills",
+        "research": "Experience, Research, Education, Projects, Skills",
+        "data_engineering": "Experience, Education, Projects/Research, Skills",
+        "data_analytics": "Experience, Education, Projects/Research, Skills",
+        "full_stack": "Experience, Education, Projects, Research, Skills",
+        "backend": "Experience, Education, Projects, Research, Skills",
+        "mobile_ios": "Experience, Education, Projects, Skills",
+    }.get(role_family, "Experience, Education, Projects/Research, Skills")
 
     notes = [
         f"Use section order: {section_order}.",
@@ -195,7 +195,7 @@ def _outreach(
     name: str,
     config: dict[str, Any],
 ) -> str:
-    first_name = name.split()[0] if name else "the applicant"
+    first_name = name.split()[0] if name else "the user"
     return (
         "Hi [Name],\n\n"
         f"I came across the {title} role at {company} and noticed that the work seems close to {angle.lower()}. "

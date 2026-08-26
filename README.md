@@ -8,11 +8,25 @@ The app owns structured state. Hermes performs transitions. A pasted JD means ap
 
 This version uses only the Python standard library for the cockpit.
 
+Requirements: Python 3.11 or newer. A fresh clone does not need a database,
+profile import, API key, or package install to start; JobApps creates an empty
+ignored SQLite database on first run.
+
 ```bash
 python3 -m hermes_jobapps.server --port 8765
 ```
 
 Then open [http://127.0.0.1:8765](http://127.0.0.1:8765).
+
+Run the complete standard-library test suite with:
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+Hermes, Typst, Tectonic, Poppler, Exa, and `gog` are optional integrations.
+Features that need them report a visible missing-tool or missing-key state; the
+base cockpit still starts without them.
 
 For a detachable local process, use a terminal multiplexer such as `screen`:
 
@@ -89,18 +103,6 @@ owns only a lightweight cockpit checkpoint.
 - If the local browser checkpoint is missing, use the Sessions panel to resume a
   Hermes session from the profile store.
 
-## Optimization Pass
-
-The latest public snapshot includes a state and personalization optimization
-pass. The short version: large audit payloads are no longer treated as normal
-context, opportunity prompts now carry compact career context instead of whole
-dashboard state, learning patterns have a fixed taxonomy with merge-on-write,
-and role-family retrieval now boosts relevant proof without starving adjacent
-evidence.
-
-The detailed public write-up is in
-[docs/OPTIMIZATION_PASS.md](docs/OPTIMIZATION_PASS.md).
-
 ## Generated Materials
 
 Generated application materials are app-owned rows in SQLite with optional local
@@ -149,6 +151,23 @@ contacts with `jobapps_find_people` and create Gmail drafts with
 `jobapps_create_gmail_draft`, which calls `gog --gmail-no-send gmail drafts
 create`. JobApps exposes no email-send tool.
 
+The People tab is separate from those discovered contacts. It contains only
+people the user explicitly chose to track. Agents use the same database contract:
+
+- `jobapps_upsert_person` adds or updates a person and requires why they were saved.
+- `jobapps_list_people` reads or searches the personal tracker.
+- `jobapps_add_person_note` appends context without replacing earlier notes.
+- `jobapps_create_gmail_draft` can later use the returned person ID as its `contact_id`.
+
+Hermes receives these through the project plugin. Codex or another local agent
+can use the existing HTTP wrapper without Hermes-specific code:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/tools/jobapps_upsert_person \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Avery Patel","linkedin_url":"https://www.linkedin.com/in/avery-patel","why_added":"Builds agent infrastructure I want to learn about.","source":"codex"}'
+```
+
 The default Hermes dashboard can keep running separately:
 
 ```bash
@@ -171,10 +190,10 @@ The SQLite database is the source of truth for app data:
 - retrieval chunks and local FTS search over eligible evidence
 - jobs and evaluations
 - prompt builds
-- `.tex` resume and cover-letter materials
+- `.typ` resume and Typst/TeX cover-letter materials
 - research notes
 - application changes
-- contacts, progress, follow-ups, approvals
+- discovered contacts, explicitly tracked people, progress, follow-ups, approvals
 - Hermes run/session IDs
 
 The cockpit surfaces pending approval gates and read-only database health. Health
@@ -196,14 +215,13 @@ as a live schema.
 
 ## What Exists
 
-- `hermes_jobapps/`: SQLite repository, tools, Hermes client, prompt builder, Typst resume helpers, TeX cover-letter/legacy helpers, workflow, and HTTP server.
+- `hermes_jobapps/`: SQLite repository, tools, Hermes client, prompt builder, Typst resume helpers, deterministic resume QA, TeX cover-letter/legacy helpers, workflow, and HTTP server.
 - `.hermes/plugins/jobapps/`: Hermes-native tool and context bridge.
 - `web/`: the cockpit UI.
 - `config/jobapps.default.json`: committed, non-secret runtime defaults.
 - `config/jobapps.example.yaml`: human-readable example settings.
 - `docs/ARCHITECTURE_RESEARCH.md`: research-backed architecture notes.
 - `docs/BRANDING.md`: Hermes-native JobApps visual and naming guidance.
-- `docs/OPTIMIZATION_PASS.md`: public-safe notes on the state and personalization optimization pass.
 - `design-system/`: extracted Hermes visual tokens and component references.
 - `Privacy.md`: privacy and repo-boundary rules.
 - `tests/`: standard-library tests for the workflow engine and database.

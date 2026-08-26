@@ -41,6 +41,7 @@ The app owns structured state. Hermes performs transitions.
 - **Transparent by default.** Every recommendation should show evidence: job requirement, matched proof point, blocker/risk, and material provenance.
 - **Human approval for external actions.** Draft freely. Fill forms cautiously later. Never submit applications, send emails, or message people without explicit approval in that moment.
 - **State is structured. Memory is selective.** Jobs, dates, contacts, statuses, generated materials, decisions, and material provenance belong in the app data layer. Durable career preferences and lessons can live in Hermes memory or profile config.
+- **People are explicitly tracked.** Search and discovery results stay in the Network workflow unless the user asks to save that person in the personal People tracker.
 - **Sponsorship filter early.** No sponsorship or obvious work-authorization blocker means skip unless the applicant explicitly says otherwise.
 - **Build the workflow before the crawler.** Manual job link/description first. Discovery and browser automation come later.
 
@@ -53,7 +54,7 @@ Follow Hermes architecture rather than duplicating it:
 - Use `/v1/responses` or named conversations for conversational continuity.
 - Use `/v1/runs` plus run status/events for longer research/tailoring workflows.
 - Preserve Hermes session/run IDs in the app database.
-- Expose JobApps database transitions as tools through the `.hermes/plugins/jobapps` project plugin, or via MCP if this later moves out of process.
+- Expose JobApps database transitions through the `.hermes/plugins/jobapps` project plugin and existing HTTP tool API. Prefer CLI or HTTP wrappers for other agents; do not add MCP unless that boundary is explicitly revisited.
 - Let Hermes provider routing, prompt assembly, session storage, memory, skills, and tool dispatch remain Hermes responsibilities.
 - Inject JobApps context through supported Hermes surfaces: project context files, plugin skills, plugin tools, and `pre_llm_call` ephemeral context. Do not fork Hermes prompt assembly for app-specific behavior.
 

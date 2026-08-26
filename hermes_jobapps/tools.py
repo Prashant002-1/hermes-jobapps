@@ -7,6 +7,7 @@ expect simple function identifiers.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +25,7 @@ from .networking import NetworkingService
 from .repository import (
     ACTIVE_HERMES_RUN_STATUSES,
     JobRepository,
+    LEARNING_POLICY_SPECS,
     TOOL_CALL_INLINE_LIMIT_BYTES,
     normalize_material_format_for_db,
     normalize_material_kind_for_db,
@@ -69,12 +71,15 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_brain_context",
-        "description": "Read the compact JobApps career brain: personal/job-search memory counts, recent events, and optional search results.",
+        "description": "Read compact JobApps career-brain counts and optional targeted search results. Recent history is opt-in.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
                 "limit": {"type": "integer"},
+                "include_recent": {"type": "boolean"},
+                "event_type": {"type": "string"},
+                "job_id": {"type": "string"},
             },
         },
         "writes": False,
@@ -260,6 +265,58 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "description": "Inspect networking operator readiness: Exa people search and draft-only Gmail via gog.",
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
         "writes": False,
+    },
+    {
+        "name": "jobapps_list_people",
+        "description": "List or search the user-curated People tracker. This does not return contacts merely discovered by Hermes or Exa.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "status": {"type": "string", "enum": ["all", "to_contact", "contacted", "follow_up", "paused"]},
+                "limit": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+        "writes": False,
+    },
+    {
+        "name": "jobapps_upsert_person",
+        "description": "Add or update one person the user explicitly wants in the personal networking tracker. Require a reason, preserve missing email as missing, and never infer or guess contact details.",
+        "input_schema": {
+            "type": "object",
+            "required": ["name", "why_added"],
+            "properties": {
+                "person_id": {"type": "string", "description": "Existing People tracker ID when updating."},
+                "name": {"type": "string"},
+                "company": {"type": "string"},
+                "role": {"type": "string"},
+                "email": {"type": "string"},
+                "linkedin_url": {"type": "string"},
+                "why_added": {"type": "string"},
+                "notes": {"type": "string"},
+                "status": {"type": "string", "enum": ["to_contact", "contacted", "follow_up", "paused"]},
+                "source": {"type": "string", "description": "Calling adapter, for example user, codex, hermes, or import."},
+            },
+            "additionalProperties": False,
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_add_person_note",
+        "description": "Append a note to one user-tracked person without replacing prior notes. Optionally update the personal networking status.",
+        "input_schema": {
+            "type": "object",
+            "required": ["person_id", "note"],
+            "properties": {
+                "person_id": {"type": "string"},
+                "note": {"type": "string"},
+                "status": {"type": "string", "enum": ["to_contact", "contacted", "follow_up", "paused"]},
+                "source": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "writes": True,
     },
     {
         "name": "jobapps_find_people",
@@ -551,7 +608,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
     },
     {
         "name": "jobapps_mark_material_ready_for_review",
-        "description": "Mark one or more materials ready for human review without creating a dashboard Action.",
+        "description": "Mark exact current materials ready for human review after source-bound semantic review and required resume layout QA. Does not create a dashboard Action.",
         "input_schema": {
             "type": "object",
             "required": ["job_id"],
@@ -559,6 +616,27 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "job_id": {"type": "string"},
                 "material_ids": {"type": "array", "items": {"type": "string"}},
                 "reason": {"type": "string"},
+                "semantic_review": {
+                    "type": "object",
+                    "required": ["reviewer", "checks", "material_sha256"],
+                    "properties": {
+                        "reviewer": {"type": "string"},
+                        "checks": {
+                            "type": "object",
+                            "required": ["truth", "role_relevance", "evidence_quality", "voice_and_no_scaffolding"],
+                            "properties": {
+                                "truth": {"type": "boolean"},
+                                "role_relevance": {"type": "boolean"},
+                                "evidence_quality": {"type": "boolean"},
+                                "voice_and_no_scaffolding": {"type": "boolean"},
+                            },
+                        },
+                        "material_sha256": {
+                            "type": "object",
+                            "description": "Map each selected material_id to the SHA-256 reviewed from its current source file or stored content.",
+                        },
+                    },
+                },
             },
         },
         "writes": True,
@@ -618,33 +696,66 @@ TOOL_SPECS: list[dict[str, Any]] = [
     {
         "name": "jobapps_record_learning_pattern",
         "description": (
-            "Persist a reusable user correction or portrayal preference so future job materials follow it. "
-            "pattern_type must be one of: truth_boundary, voice, positioning, materials_content, "
-            "materials_format, materials_quality, outreach, workflow (free-form types are normalized into "
-            "this taxonomy). Near-duplicate patterns of the same type are merged in place, not appended."
+            "Persist one canonical reusable policy. Facts belong in profile facts/proof points and one-job "
+            "choices belong in portrayal decisions. Choose one fixed rule_key; code owns its type and scope. "
+            "A newer write with the same rule_key automatically supersedes the older active version."
         ),
         "input_schema": {
             "type": "object",
-            "required": ["pattern_type", "trigger", "preference"],
+            "required": ["rule_key", "trigger", "preference"],
             "properties": {
-                "pattern_type": {
-                    "type": "string",
-                    "enum": [
-                        "truth_boundary",
-                        "voice",
-                        "positioning",
-                        "materials_content",
-                        "materials_format",
-                        "materials_quality",
-                        "outreach",
-                        "workflow",
-                    ],
-                },
                 "trigger": {"type": "string"},
                 "preference": {"type": "string"},
+                "rule_key": {
+                    "type": "string",
+                    "enum": [
+                        "candidate.truth",
+                        "candidate.voice",
+                        "resume.layout",
+                        "resume.summary",
+                        "resume.evidence_selection",
+                        "resume.bullets",
+                        "cover_letter.substance",
+                        "outreach.first_contact",
+                        "workflow.operations",
+                    ],
+                },
                 "source": {"type": "string"},
                 "confidence": {"type": "number"},
                 "metadata": {"type": "object"},
+            },
+        },
+        "writes": True,
+    },
+    {
+        "name": "jobapps_update_learning_pattern",
+        "description": "Retire, supersede, reactivate, or canonicalize one policy while preserving its audit history.",
+        "input_schema": {
+            "type": "object",
+            "required": ["pattern_id", "status"],
+            "properties": {
+                "pattern_id": {"type": "string"},
+                "status": {"type": "string", "enum": ["active", "retired", "superseded"]},
+                "superseded_by": {"type": "string"},
+                "pattern_type": {"type": "string"},
+                "trigger": {"type": "string"},
+                "preference": {"type": "string"},
+                "rule_key": {
+                    "type": "string",
+                    "enum": [
+                        "candidate.truth",
+                        "candidate.voice",
+                        "resume.layout",
+                        "resume.summary",
+                        "resume.evidence_selection",
+                        "resume.bullets",
+                        "cover_letter.substance",
+                        "outreach.first_contact",
+                        "workflow.operations",
+                    ],
+                },
+                "metadata": {"type": "object"},
+                "reason": {"type": "string"},
             },
         },
         "writes": True,
@@ -692,6 +803,7 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "job_id": {"type": "string"},
                 "status": {"type": "string"},
                 "note": {"type": "string"},
+                "next_action": {"type": "string"},
                 "hermes_run_id": {"type": "string"},
                 "hermes_session_id": {"type": "string"},
             },
@@ -758,9 +870,13 @@ DEFAULT_TOOL_NAMES = frozenset(
         "jobapps_record_portrayal_decision",
         "jobapps_record_application_change",
         "jobapps_record_learning_pattern",
+        "jobapps_update_learning_pattern",
         "jobapps_record_brain_event",
         "jobapps_update_status",
         # Networking state and draft-only communication support.
+        "jobapps_list_people",
+        "jobapps_upsert_person",
+        "jobapps_add_person_note",
         "jobapps_find_people",
         "jobapps_create_gmail_draft",
         "jobapps_create_progress_item",
@@ -874,6 +990,9 @@ class AgentToolbox:
             "jobapps_hydrate_job_url": self._hydrate_job_url,
             "jobapps_prepare_discovered_job": self._prepare_discovered_job,
             "jobapps_networking_status": self._networking_status,
+            "jobapps_list_people": self._list_people,
+            "jobapps_upsert_person": self._upsert_person,
+            "jobapps_add_person_note": self._add_person_note,
             "jobapps_find_people": self._find_people,
             "jobapps_create_gmail_draft": self._create_gmail_draft,
             "jobapps_record_application_signal": self._record_application_signal,
@@ -897,6 +1016,7 @@ class AgentToolbox:
             "jobapps_record_research_note": self._record_research_note,
             "jobapps_record_application_change": self._record_application_change,
             "jobapps_record_learning_pattern": self._record_learning_pattern,
+            "jobapps_update_learning_pattern": self._update_learning_pattern,
             "jobapps_create_progress_item": self._create_progress_item,
             "jobapps_create_followup": self._create_followup,
             "jobapps_update_status": self._update_status,
@@ -958,25 +1078,11 @@ class AgentToolbox:
                 "profile_facts": career.get("profile_facts", []),
                 "proof_points": career.get("proof_points", []),
                 "learning_patterns": career.get("learning_patterns", []),
-                "recent_tailoring_requirements": career.get("recent_tailoring_requirements", [])[:result_limit],
-                "recent_portrayal_decisions": career.get("recent_portrayal_decisions", [])[:result_limit],
-                "recent_jobs": [
-                    {
-                        "id": item.get("id"),
-                        "title": item.get("title"),
-                        "company": item.get("company"),
-                        "status": item.get("status"),
-                        "decision": item.get("decision"),
-                        "role_family": item.get("role_family"),
-                        "next_action": item.get("next_action"),
-                    }
-                    for item in career.get("recent_jobs", [])[:result_limit]
-                ],
                 "brain_context": {
                     "entity_counts": brain_context.get("entity_counts", {}),
                     "event_counts": brain_context.get("event_counts", {}),
-                    "recent_events": (brain_context.get("recent_events") or [])[: min(result_limit, 10)],
                 },
+                "context_policy": career.get("context_policy", {}),
             },
         }
         if parse_bool(payload.get("include_dashboard", False), "include_dashboard", default=False):
@@ -1014,16 +1120,21 @@ class AgentToolbox:
     def _brain_context(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.repo.brain_context(
             query=payload.get("query", ""),
-            limit=parse_limit(payload.get("limit", 12), default=12, maximum=80),
+            limit=parse_limit(payload.get("limit", 6), default=6, maximum=8),
+            include_recent=bool(payload.get("include_recent", False)),
+            event_type=payload.get("event_type"),
+            job_id=payload.get("job_id"),
         )
 
     def _search_brain(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.repo.search_brain(
-            payload["query"],
-            entity_type=payload.get("entity_type"),
-            event_type=payload.get("event_type"),
-            job_id=payload.get("job_id"),
-            limit=parse_limit(payload.get("limit", 12), default=12, maximum=80),
+        return _compact_brain_search_tool_result(
+            self.repo.search_brain(
+                payload["query"],
+                entity_type=payload.get("entity_type"),
+                event_type=payload.get("event_type"),
+                job_id=payload.get("job_id"),
+                limit=parse_limit(payload.get("limit", 8), default=8, maximum=10),
+            )
         )
 
     def _upsert_brain_entity(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1098,11 +1209,12 @@ class AgentToolbox:
         )
 
     def _retrieve_for_job(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.repo.retrieve_for_job(
+        result = self.repo.retrieve_for_job(
             payload["job_id"],
             use=payload.get("use", "resume"),
-            limit=parse_limit(payload.get("limit", 8), default=8),
+            limit=parse_limit(payload.get("limit", 6), default=6),
         )
+        return _compact_retrieval_tool_result(result)
 
     def _discovery_status(self, payload: dict[str, Any]) -> dict[str, Any]:
         return DiscoveryService(self.repo, self.config).status()
@@ -1126,6 +1238,38 @@ class AgentToolbox:
 
     def _networking_status(self, payload: dict[str, Any]) -> dict[str, Any]:
         return NetworkingService(self.repo, self.config).status()
+
+    def _list_people(self, payload: dict[str, Any]) -> dict[str, Any]:
+        people = self.repo.list_people(
+            payload.get("query", ""),
+            status=payload.get("status", "all"),
+            limit=parse_limit(payload.get("limit", 50), default=50, maximum=200),
+        )
+        return {"count": len(people), "people": [_compact_person_tool_result(person) for person in people]}
+
+    def _upsert_person(self, payload: dict[str, Any]) -> dict[str, Any]:
+        person = self.repo.upsert_person(
+            payload["name"],
+            payload["why_added"],
+            contact_id=payload.get("person_id", ""),
+            company=payload.get("company", ""),
+            role=payload.get("role", ""),
+            email=payload.get("email", ""),
+            linkedin_url=payload.get("linkedin_url", ""),
+            notes=payload.get("notes", ""),
+            network_status=payload.get("status", "to_contact"),
+            source=payload.get("source", "agent"),
+        )
+        return {"person": _compact_person_tool_result(person)}
+
+    def _add_person_note(self, payload: dict[str, Any]) -> dict[str, Any]:
+        person = self.repo.append_person_note(
+            payload["person_id"],
+            payload["note"],
+            network_status=payload.get("status"),
+            source=payload.get("source", "agent"),
+        )
+        return {"person": _compact_person_tool_result(person)}
 
     def _find_people(self, payload: dict[str, Any]) -> dict[str, Any]:
         return NetworkingService(self.repo, self.config).search_people(
@@ -1201,7 +1345,9 @@ class AgentToolbox:
         )
 
     def _evaluate_job(self, payload: dict[str, Any]) -> dict[str, Any]:
-        context = payload.get("context") or self.repo.career_context()
+        job = payload["job"]
+        query = "\n".join(str(job.get(field) or "") for field in ("title", "company", "description"))
+        context = payload.get("context") or self.repo.career_context(use="resume", query=query, learning_limit=8)
         return evaluate_job(payload["job"], context, self.config)
 
     def _prepare_opportunity(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1222,7 +1368,7 @@ class AgentToolbox:
                 "user_notes": payload.get("user_notes", ""),
             }
         workflow = JobAppsWorkflow(self.repo, self)
-        return workflow.prepare_opportunity(job)
+        return _compact_job_tool_record(workflow.prepare_opportunity(job))
 
     def _start_material_prep(self, payload: dict[str, Any]) -> dict[str, Any]:
         from .runs import HermesRunManager
@@ -1258,14 +1404,16 @@ class AgentToolbox:
         )
 
     def _draft_materials(self, payload: dict[str, Any]) -> dict[str, Any]:
-        context = payload.get("context") or self.repo.career_context()
+        job = payload["job"]
+        query = "\n".join(str(job.get(field) or "") for field in ("title", "company", "description"))
+        context = payload.get("context") or self.repo.career_context(use="resume", query=query, learning_limit=8)
         return draft_materials(payload["job"], payload["evaluation"], context, self.config)
 
     def _record_job(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = dict(payload["job"])
         if payload.get("job_id") and not job.get("id"):
             job["id"] = payload["job_id"]
-        return self.repo.create_job(job, payload["evaluation"])
+        return _compact_job_tool_record(self.repo.create_job(job, payload["evaluation"]))
 
     def _save_material(self, payload: dict[str, Any]) -> dict[str, Any]:
         content = payload["content"]
@@ -1305,7 +1453,7 @@ class AgentToolbox:
     def _create_resume_typst(self, payload: dict[str, Any]) -> dict[str, Any]:
         job = self.repo.get_job(payload["job_id"])["job"]
         context = self.repo.career_context()
-        name = payload.get("name") or _profile_value(context, "name", "Applicant Name")
+        name = payload.get("name") or _profile_value(context, "name", "Candidate Name")
         headline = payload.get("headline") or f"AI Engineer focused on agentic systems for {job.get('title') or 'target roles'}"
         typst = build_full_resume_typst(name=name, headline=headline, sections=payload.get("sections") or [])
         filename = job_material_filename(job, "resume", "typ")
@@ -1342,7 +1490,7 @@ class AgentToolbox:
             body=payload["body"],
             company=payload.get("company") or job.get("company") or "Hiring Team",
             role_title=payload.get("role_title") or job.get("title") or "Target Role",
-            name=payload.get("name") or _profile_value(context, "name", "Applicant Name"),
+            name=payload.get("name") or _profile_value(context, "name", "Candidate Name"),
         )
         filename = job_material_filename(job, "cover_letter", "tex")
         file_path = write_material_artifact(
@@ -1399,7 +1547,14 @@ class AgentToolbox:
             material["id"],
             content=after,
             file_path=file_path or None,
-            metadata={"last_edit_reason": payload.get("reason", ""), "review_status": "draft"},
+            metadata={
+                "last_edit_reason": payload.get("reason", ""),
+                "review_status": "draft",
+                "compile": {},
+                "verification": {},
+                "layout_qa": {},
+                "semantic_review": {},
+            },
         )
         revision = self.repo.record_material_revision(
             material["id"],
@@ -1486,12 +1641,96 @@ class AgentToolbox:
         outside_job = [material_id for material_id in material_ids if material_id not in job_material_ids]
         if outside_job:
             raise ValueError("All material_ids must belong to the requested job.")
+        selected_materials = [item for item in job.get("materials", []) if item["id"] in material_ids]
+        blocked_materials: list[dict[str, Any]] = []
+        for material in selected_materials:
+            if not str(material.get("kind") or "").startswith("resume"):
+                continue
+            if normalize_material_format(material.get("format")) != "typ":
+                continue
+            metadata = material.get("metadata") or {}
+            verification = metadata.get("verification") or (metadata.get("compile") or {}).get("verification") or {}
+            layout = verification.get("layout") if isinstance(verification, dict) else None
+            artifact_errors = _layout_artifact_errors(self.config, material, layout)
+            if not isinstance(layout, dict) or not layout.get("ready") or artifact_errors:
+                blocked_materials.append(
+                    {
+                        "material_id": material["id"],
+                        "layout_status": layout.get("status", "not_run") if isinstance(layout, dict) else "not_run",
+                        "violations": layout.get("violations", []) if isinstance(layout, dict) else [],
+                        "artifact_errors": artifact_errors,
+                    }
+                )
+        if blocked_materials:
+            return {
+                "ok": False,
+                "status": "layout_qa_blocked",
+                "job_id": payload["job_id"],
+                "blocked_materials": blocked_materials,
+                "next_step": "Compile the Typst resume, apply verification.layout.repair_plan, and mark ready only after layout.ready is true.",
+            }
+
+        semantic_review = payload.get("semantic_review")
+        semantic_blocked: list[dict[str, Any]] = []
+        required_checks = (
+            "truth",
+            "role_relevance",
+            "evidence_quality",
+            "voice_and_no_scaffolding",
+        )
+        reviewer = ""
+        checks: dict[str, Any] = {}
+        reviewed_hashes: dict[str, Any] = {}
+        if isinstance(semantic_review, dict):
+            reviewer = str(semantic_review.get("reviewer") or "").strip()
+            raw_checks = semantic_review.get("checks")
+            checks = raw_checks if isinstance(raw_checks, dict) else {}
+            raw_hashes = semantic_review.get("material_sha256")
+            reviewed_hashes = raw_hashes if isinstance(raw_hashes, dict) else {}
+        for material in selected_materials:
+            errors: list[str] = []
+            if not isinstance(semantic_review, dict):
+                errors.append("semantic_review_missing")
+            if not reviewer:
+                errors.append("semantic_reviewer_missing")
+            failed_checks = [name for name in required_checks if checks.get(name) is not True]
+            if failed_checks:
+                errors.extend(f"semantic_check_failed:{name}" for name in failed_checks)
+            current_hash = _material_source_sha256(self.config, material)
+            if not current_hash:
+                errors.append("material_source_unavailable")
+            elif str(reviewed_hashes.get(material["id"]) or "") != current_hash:
+                errors.append("semantic_review_hash_mismatch")
+            if errors:
+                semantic_blocked.append({"material_id": material["id"], "errors": errors})
+        if semantic_blocked:
+            return {
+                "ok": False,
+                "status": "semantic_review_blocked",
+                "job_id": payload["job_id"],
+                "blocked_materials": semantic_blocked,
+                "next_step": "Review the exact current sources against the four semantic checks and provide their current SHA-256 values.",
+            }
+
         updated_materials = [
-            self.repo.update_material(material_id, metadata={"review_status": "ready_for_review"})
-            for material_id in material_ids
+            self.repo.mark_material_ready_for_review(
+                material["id"],
+                reviewer=reviewer,
+                checks=checks,
+                source_sha256=str(reviewed_hashes[material["id"]]),
+            )
+            for material in selected_materials
         ]
         reason = payload.get("reason", "Materials ready for final human review.")
-        return {"approval": None, "materials": updated_materials, "progress_item": None, "reason": reason}
+        return {
+            "ok": True,
+            "status": "ready_for_review",
+            "job_id": payload["job_id"],
+            "approval": None,
+            "materials": [_compact_material_tool_result(item) for item in updated_materials],
+            "progress_item": None,
+            "reason": reason,
+        }
 
     def _save_prompt(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.repo.save_prompt_build(
@@ -1525,13 +1764,36 @@ class AgentToolbox:
         )
 
     def _record_learning_pattern(self, payload: dict[str, Any]) -> dict[str, Any]:
+        metadata = dict(payload.get("metadata", {}))
+        rule_key = str(payload.get("rule_key") or metadata.get("rule_key") or "").strip()
+        if not rule_key:
+            raise ValueError("Reusable learning policies require a fixed rule_key.")
+        metadata = {"rule_key": rule_key}
+        spec = LEARNING_POLICY_SPECS.get(rule_key)
+        if spec is None:
+            raise ValueError(f"Unsupported learning policy key: {rule_key}")
         return self.repo.record_learning_pattern(
-            payload["pattern_type"],
+            spec["pattern_type"],
             payload["trigger"],
             payload["preference"],
             source=payload.get("source", "agent"),
             confidence=float(payload.get("confidence", 0.8)),
-            metadata=payload.get("metadata", {}),
+            metadata=metadata,
+        )
+
+    def _update_learning_pattern(self, payload: dict[str, Any]) -> dict[str, Any]:
+        metadata = dict(payload.get("metadata", {}))
+        if "rule_key" in payload:
+            metadata["rule_key"] = payload["rule_key"]
+        return self.repo.update_learning_pattern(
+            payload["pattern_id"],
+            status=payload["status"],
+            superseded_by=payload.get("superseded_by"),
+            pattern_type=payload.get("pattern_type"),
+            trigger=payload.get("trigger"),
+            preference=payload.get("preference"),
+            metadata=metadata or None,
+            reason=payload.get("reason", ""),
         )
 
     def _create_progress_item(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1554,15 +1816,18 @@ class AgentToolbox:
         )
 
     def _update_status(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.repo.record_event(
-            payload["job_id"],
-            "status_changed",
-            {
-                "status": payload["status"],
-                "note": payload.get("note", ""),
-                "hermes_run_id": payload.get("hermes_run_id", ""),
-                "hermes_session_id": payload.get("hermes_session_id", ""),
-            },
+        return _compact_job_tool_record(
+            self.repo.record_event(
+                payload["job_id"],
+                "status_changed",
+                {
+                    "status": payload["status"],
+                    "note": payload.get("note", ""),
+                    "next_action": payload.get("next_action"),
+                    "hermes_run_id": payload.get("hermes_run_id", ""),
+                    "hermes_session_id": payload.get("hermes_session_id", ""),
+                },
+            )
         )
 
     def _request_approval(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1579,6 +1844,302 @@ class AgentToolbox:
             payload["status"],
             payload=payload.get("payload", {}),
         )
+
+
+def _tool_clip(value: Any, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1].rstrip()}…"
+
+
+def _compact_person_tool_result(person: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": person.get("id", ""),
+        "name": person.get("name", ""),
+        "company": person.get("company", ""),
+        "role": person.get("role", ""),
+        "email": person.get("email", ""),
+        "email_status": person.get("email_status", ""),
+        "linkedin_url": person.get("linkedin_url", ""),
+        "why_added": person.get("why_added", ""),
+        "notes": _tool_clip(person.get("notes", ""), 1200),
+        "status": person.get("network_status", "to_contact"),
+        "updated_at": person.get("updated_at", ""),
+    }
+
+
+def _compact_brain_search_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    compact_events: list[dict[str, Any]] = []
+    for event in result.get("events", []):
+        raw_entity = event.get("entity")
+        entity = raw_entity if isinstance(raw_entity, dict) else {}
+        compact_events.append(
+            {
+                "id": event.get("id"),
+                "job_id": event.get("job_id"),
+                "event_type": event.get("event_type"),
+                "title": _tool_clip(event.get("title"), 180),
+                "content": _tool_clip(event.get("content"), 500),
+                "source": event.get("source"),
+                "occurred_at": event.get("occurred_at"),
+                "rank": event.get("rank"),
+                "entity": {
+                    "id": entity.get("id"),
+                    "type": entity.get("type"),
+                    "title": _tool_clip(entity.get("title"), 160),
+                },
+            }
+        )
+    return {
+        "query": result.get("query"),
+        "retrieval_mode": result.get("retrieval_mode"),
+        "filters": result.get("filters"),
+        "events": compact_events,
+    }
+
+
+def _compact_job_header(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: job.get(key)
+        for key in (
+            "id",
+            "title",
+            "company",
+            "location",
+            "url",
+            "status",
+            "role_family",
+            "decision",
+            "next_action",
+            "hermes_session_id",
+            "hermes_run_id",
+            "created_at",
+            "updated_at",
+        )
+        if job.get(key) not in (None, "")
+    }
+
+
+def _compact_evaluation_tool_result(evaluation: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        key: evaluation.get(key)
+        for key in (
+            "job_id",
+            "decision",
+            "role_family",
+            "sponsorship_risk",
+            "location_risk",
+            "seniority_risk",
+            "effort_risk",
+            "strongest_angle",
+            "next_action",
+        )
+        if evaluation.get(key) not in (None, "")
+    }
+    compact["blocker_flags"] = [
+        {
+            "area": item.get("area"),
+            "assessment": _tool_clip(
+                item.get("assessment") or item.get("evidence") or item.get("label"),
+                240,
+            ),
+        }
+        for item in (evaluation.get("blocker_flags") or [])[:6]
+        if isinstance(item, dict)
+    ]
+    return compact
+
+
+def _compact_material_tool_result(material: dict[str, Any]) -> dict[str, Any]:
+    raw_metadata = material.get("metadata")
+    metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+    raw_compile_metadata = metadata.get("compile")
+    compile_metadata: dict[str, Any] = (
+        raw_compile_metadata if isinstance(raw_compile_metadata, dict) else {}
+    )
+    compact_metadata = {
+        key: metadata.get(key)
+        for key in ("review_status", "pdf_path", "page_count", "word_count")
+        if metadata.get(key) not in (None, "")
+    }
+    if compile_metadata:
+        compact_metadata["compile"] = {
+            key: compile_metadata.get(key)
+            for key in ("status", "compiler", "pdf_path", "ok")
+            if compile_metadata.get(key) not in (None, "")
+        }
+    raw_semantic_review = metadata.get("semantic_review")
+    if isinstance(raw_semantic_review, dict):
+        compact_metadata["semantic_review"] = {
+            key: raw_semantic_review.get(key)
+            for key in ("status", "reviewer", "source_sha256")
+            if raw_semantic_review.get(key) not in (None, "")
+        }
+    return {
+        key: value
+        for key, value in {
+            "id": material.get("id"),
+            "job_id": material.get("job_id"),
+            "kind": material.get("kind"),
+            "format": material.get("format"),
+            "file_path": material.get("file_path"),
+            "source": material.get("source"),
+            "status": material.get("status"),
+            "metadata": compact_metadata,
+            "created_at": material.get("created_at"),
+            "updated_at": material.get("updated_at"),
+        }.items()
+        if value not in (None, "", {})
+    }
+
+
+def _compact_job_tool_record(record: dict[str, Any]) -> dict[str, Any]:
+    compact: dict[str, Any] = {
+        "job": _compact_job_header(record.get("job") or {}),
+        "evaluation": _compact_evaluation_tool_result(record.get("evaluation") or {}),
+        "materials": [
+            _compact_material_tool_result(item)
+            for item in (record.get("materials") or [])
+            if isinstance(item, dict)
+        ],
+        "prompts": [
+            {
+                key: item.get(key)
+                for key in ("id", "job_id", "prompt_type", "status", "created_at")
+                if item.get(key) not in (None, "")
+            }
+            for item in (record.get("prompts") or [])
+            if isinstance(item, dict)
+        ],
+        "tailoring_requirements": [
+            {
+                "id": item.get("id"),
+                "requirement": _tool_clip(item.get("requirement"), 420),
+                "category": item.get("category"),
+                "priority": item.get("priority"),
+                "status": item.get("status"),
+            }
+            for item in (record.get("tailoring_requirements") or [])
+            if isinstance(item, dict)
+        ],
+        "application_signals": [
+            {
+                "id": item.get("id"),
+                "signal_type": item.get("signal_type"),
+                "label": item.get("label"),
+                "value": _tool_clip(item.get("value"), 320),
+            }
+            for item in (record.get("application_signals") or [])
+            if isinstance(item, dict)
+        ],
+        "approvals": [
+            {key: item.get(key) for key in ("id", "action", "status") if item.get(key) not in (None, "")}
+            for item in (record.get("approvals") or [])
+            if isinstance(item, dict)
+        ],
+        "progress_items": [
+            {key: item.get(key) for key in ("id", "title", "kind", "status", "due_date") if item.get(key) not in (None, "")}
+            for item in (record.get("progress_items") or [])
+            if isinstance(item, dict)
+        ],
+        "tool_calls": [
+            {key: item.get(key) for key in ("id", "tool_name", "status", "created_at") if item.get(key) not in (None, "")}
+            for item in (record.get("tool_calls") or [])
+            if isinstance(item, dict)
+        ],
+    }
+    run = record.get("run")
+    if isinstance(run, dict):
+        compact["run"] = {
+            key: run.get(key)
+            for key in ("id", "job_id", "status", "started_at", "finished_at")
+            if run.get(key) not in (None, "")
+        }
+    prompt = record.get("prompt_to_hermes")
+    if isinstance(prompt, dict):
+        compact["prompt_to_hermes"] = {
+            key: prompt.get(key)
+            for key in ("id", "job_id", "prompt_type", "status")
+            if prompt.get(key) not in (None, "")
+        }
+    return compact
+
+
+def _compact_retrieval_tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    evidence: list[dict[str, Any]] = []
+    for item in result.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        raw_source = item.get("source")
+        source: dict[str, Any] = raw_source if isinstance(raw_source, dict) else {}
+        evidence.append(
+            {
+                "rank": item.get("rank"),
+                "why": _tool_clip(item.get("why"), 320),
+                "source": {
+                    "id": source.get("id"),
+                    "label": source.get("label"),
+                    "summary": _tool_clip(source.get("summary"), 700),
+                    "evidence": _tool_clip(source.get("evidence"), 900),
+                    "role_family": source.get("role_family"),
+                    "tags": (source.get("tags") or [])[:16],
+                    "status": source.get("status"),
+                    "user_confirmed": source.get("user_confirmed"),
+                    "narrative_version": source.get("narrative_version"),
+                    "allowed_uses": (source.get("allowed_uses") or [])[:12],
+                    "risk_level": source.get("risk_level"),
+                },
+            }
+        )
+    return {
+        "job_id": result.get("job_id"),
+        "job": _compact_job_header(result.get("job") or {}),
+        "profile_facts": [
+            {
+                "fact_key": item.get("fact_key"),
+                "value": _tool_clip(item.get("value"), 500),
+                "category": item.get("category"),
+            }
+            for item in (result.get("profile_facts") or [])
+            if isinstance(item, dict)
+        ],
+        "policy": result.get("policy"),
+        "query": _tool_clip(result.get("query"), 900),
+        "requirements": [_tool_clip(item, 420) for item in (result.get("requirements") or [])[:8]],
+        "signals": [
+            {
+                "signal_type": item.get("signal_type"),
+                "label": item.get("label"),
+                "value": _tool_clip(item.get("value"), 320),
+            }
+            for item in (result.get("signals") or [])[:12]
+            if isinstance(item, dict)
+        ],
+        "learning_patterns": [
+            {
+                "id": item.get("id"),
+                "rule_key": (item.get("metadata") or {}).get("rule_key"),
+                "pattern_type": item.get("pattern_type"),
+                "trigger": _tool_clip(item.get("trigger"), 280),
+                "preference": _tool_clip(item.get("preference"), 700),
+            }
+            for item in (result.get("learning_patterns") or [])[:8]
+            if isinstance(item, dict)
+        ],
+        "evidence": evidence,
+        "excluded": [
+            {
+                key: item.get(key)
+                for key in ("id", "label", "status", "user_confirmed", "reason", "superseded_by")
+                if item.get(key) not in (None, "")
+            }
+            for item in (result.get("excluded") or [])[:8]
+            if isinstance(item, dict)
+        ],
+        "eligibility_filter": result.get("eligibility_filter"),
+        "retrieval_mode": result.get("retrieval_mode"),
+    }
 
 
 def normalize_material_format(value: Any) -> str:
@@ -1680,3 +2241,65 @@ def _validate_material_path(config: dict[str, Any], file_path: str | Path) -> Pa
     except ValueError as exc:
         raise ValueError("Material file path must stay inside the configured materials_path.") from exc
     return resolved_candidate
+
+
+def _layout_artifact_errors(
+    config: dict[str, Any],
+    material: dict[str, Any],
+    layout: Any,
+) -> list[str]:
+    if not isinstance(layout, dict):
+        return ["layout_report_missing"]
+    artifact = layout.get("artifact")
+    if not isinstance(artifact, dict):
+        return ["artifact_hashes_missing"]
+    expected_source = str(artifact.get("source_sha256") or "")
+    expected_pdf = str(artifact.get("pdf_sha256") or "")
+    if not expected_source or not expected_pdf:
+        return ["artifact_hashes_missing"]
+
+    errors: list[str] = []
+    try:
+        source_path = _validate_material_path(config, str(material.get("file_path") or ""))
+    except ValueError:
+        return ["source_path_invalid"]
+    if not source_path.is_file() or _sha256_path(source_path) != expected_source:
+        errors.append("source_hash_mismatch")
+    content = material.get("content")
+    if isinstance(content, str) and hashlib.sha256(content.encode("utf-8")).hexdigest() != expected_source:
+        errors.append("stored_content_hash_mismatch")
+
+    metadata = material.get("metadata") or {}
+    raw_compile = metadata.get("compile")
+    compile_metadata: dict[str, Any] = raw_compile if isinstance(raw_compile, dict) else {}
+    pdf_value = metadata.get("pdf_path") or compile_metadata.get("pdf_path") or source_path.with_suffix(".pdf")
+    try:
+        pdf_path = _validate_material_path(config, str(pdf_value))
+    except ValueError:
+        errors.append("pdf_path_invalid")
+    else:
+        if not pdf_path.is_file() or _sha256_path(pdf_path) != expected_pdf:
+            errors.append("pdf_hash_mismatch")
+    return errors
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _material_source_sha256(config: dict[str, Any], material: dict[str, Any]) -> str:
+    file_path = str(material.get("file_path") or "").strip()
+    if file_path:
+        try:
+            source_path = _validate_material_path(config, file_path)
+        except ValueError:
+            return ""
+        return _sha256_path(source_path) if source_path.is_file() else ""
+    content = material.get("content")
+    if not isinstance(content, str):
+        return ""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
