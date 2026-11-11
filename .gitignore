@@ -9,7 +9,7 @@ __pycache__/
 .venv/
 venv/
 
-# Hermes private app data
+# Private data: legacy database, workspaces, documents
 data/
 private/
 exports/
@@ -34,13 +34,14 @@ config/jobapps.local.*
 # Local handoff/audit notes
 docs/TIGHTEN-*.md
 
-# Keep project plugin code publishable while ignoring local Hermes state.
-.hermes/*
-!.hermes/plugins/
-!.hermes/plugins/jobapps/
-!.hermes/plugins/jobapps/**
-.hermes/plugins/jobapps/**/__pycache__/
-.hermes/plugins/jobapps/**/*.py[cod]
+# Local Hermes state
+.hermes/
+
+# Build output
+build/
+dist/
+!dashboard/dist/
+*.egg-info/
 
 # OS/editor noise
 .DS_Store

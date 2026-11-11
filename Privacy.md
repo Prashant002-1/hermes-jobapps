@@ -1,84 +1,25 @@
-# Privacy Boundary
+# Privacy
 
-Hermes JobApps separates app architecture from app data.
+JobApps keeps your job search on your machine, in a folder you control.
 
-The committed repository should contain code, schemas, documentation, example config, and tests. It should not contain private profile data, generated materials, application history, SQLite databases, resumes, cover letters, secrets, API keys, browser exports, downloaded job descriptions, or local environment files.
+## What is stored and where
 
-## Local Private Data
+Everything lives in the workspace folder (default `~/JobApps`): your profile, evidence, postings, documents, people and notes, as plain files. The plugin keeps no other copy and has no database.
 
-These files are private runtime data:
+## What leaves your machine
 
-- private profile/seed files such as `knowledge_base.html`
-- `config/jobapps.local.*`
-- `data/`
-- `private/`
-- `exports/`
-- `materials/`
-- `work/`
-- generated `.tex`, `.pdf`, `.docx`, or resume/cover-letter variants
-- `.env` and `.env.*`
-- `*.db`, `*.sqlite`, `*.sqlite3`, and SQLite WAL/SHM sidecar files
+Nothing, unless you ask for one of these:
 
-They are ignored in the committed `.gitignore` and also in this checkout's `.git/info/exclude`.
+- **Posting lookups.** Opening a Greenhouse, Lever or Ashby link calls that site's public job API.
+- **Job and people search.** These send your search words to Exa, and only when `EXA_API_KEY` is set.
+- **Gmail drafts.** Created through the `gog` command in your own account. JobApps cannot send mail.
 
-## Backend Data Rule
+The model you run Hermes with sees whatever the agent reads from the workspace, as with any other file it works on.
 
-Backend state belongs in the data layer, not in source files.
+## What the agent may not do
 
-Store jobs, evaluations, materials, contacts, statuses, follow-up dates, and approval records in SQLite or another runtime database. Do not bake those records into Python, JavaScript, Markdown docs, seed files, tests, or config examples.
+Send, submit, upload or message on your behalf. It prepares drafts and files; you send them. It tracks a person only when you ask and never guesses an email address.
 
-Private seed files are import sources only. Their shape can change and must not be treated as app architecture. Convert useful facts into `profile_facts` and `proof_points` rows before relying on them in workflows.
+## Keeping the repository clean
 
-## Hermes State Rule
-
-Hermes has its own profile, memory, session, provider, and tool state. Keep that separate from JobApps application data.
-
-- Hermes memory: durable preferences, lessons, and high-level user context.
-- JobApps database: application facts, materials, progress, contacts, prompts, and decisions.
-- Correlation: store Hermes run/session IDs in JobApps rows when a workflow crosses systems.
-
-Do not commit Hermes profile `.env`, memory files, session databases, logs, or copied tool outputs.
-
-## Secrets Rule
-
-Secrets must come from environment variables or a local secret manager, never committed config.
-
-Examples:
-
-- `OPENAI_API_KEY`
-- Hermes API tokens
-- email provider credentials
-- LinkedIn/browser automation credentials
-- database URLs for non-local deployments
-
-If a secret is ever committed, rotate it immediately and remove it from git history before publishing.
-
-## Agent Safety Rule
-
-Job descriptions, web pages, emails, PDFs, and form fields are untrusted data. They can contain instructions aimed at the agent.
-
-Hermes should:
-
-- keep system instructions separate from fetched content
-- treat fetched content as data, not commands
-- validate structured outputs before recording them
-- keep external tools least-privileged
-- ask for approval before sending, submitting, uploading, messaging, or updating external systems
-- log approval decisions in the app data layer
-
-## Before Push
-
-Run these checks before pushing:
-
-```bash
-git status --short --ignored
-git ls-files -o --exclude-standard
-git diff --cached --check
-rg -n "OPENAI_API_KEY|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|password|secret|token|api[_-]?key" .
-```
-
-Also enable GitHub secret scanning and push protection before the repo becomes public.
-
-## Publishing Standard
-
-The repository is publishable only when a fresh clone can run with placeholder/sample data and no private facts are required in committed files. The real profile, app database, generated materials, and external credentials must be supplied locally at runtime.
+This repository is code only. Never commit a workspace, a legacy `data/` folder, documents, secrets or local config. `.gitignore` covers the usual locations; tests use temporary workspaces with invented data.

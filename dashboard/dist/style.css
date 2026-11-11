@@ -1,0 +1,1936 @@
+/* JobApps cockpit. Amber Signal: warm ivory, safety orange, Hanken Grotesk,
+   square corners, fine rules, whitespace instead of boxes.
+   Every rule is scoped under .jobapps-root so the Hermes dashboard is untouched. */
+
+@font-face {
+  font-family: "JobApps Hanken Grotesk";
+  src: url("fonts/hanken-grotesk-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+.jobapps-root {
+  --ja-bg: #fcf9f8;
+  --ja-raised: #ffffff;
+  --ja-sunk: #f0ece8;
+  --ja-surface: #f5f2f0;
+  --ja-hover: #ede9e5;
+  --ja-text: #1c1b1b;
+  --ja-text-2: #4a4745;
+  --ja-text-3: #6b6561;
+  --ja-accent: #b72301;
+  --ja-accent-strong: #873019;
+  --ja-accent-dim: rgba(183, 35, 1, 0.08);
+  --ja-on-accent: #ffffff;
+  --ja-amber: #c45a00;
+  --ja-gold: #ad4c00;
+  --ja-gold-dim: rgba(189, 84, 0, 0.08);
+  --ja-good: #1a7a3e;
+  --ja-good-dim: rgba(26, 122, 62, 0.08);
+  --ja-border: rgba(28, 27, 27, 0.1);
+  --ja-border-hover: rgba(28, 27, 27, 0.22);
+  --ja-border-strong: rgba(28, 27, 27, 0.35);
+  --ja-border-accent: rgba(183, 35, 1, 0.3);
+  --ja-scrim: rgba(28, 27, 27, 0.3);
+  --ja-font: "JobApps Hanken Grotesk", "Hanken Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --ja-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  color: var(--ja-text);
+  background: var(--ja-bg);
+  font-family: var(--ja-font);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: left;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+.jobapps-root.jobapps-standalone {
+  min-height: 100vh;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  .jobapps-root {
+    --ja-bg: #181514;
+    --ja-raised: #201c1b;
+    --ja-sunk: #2b2625;
+    --ja-surface: #262221;
+    --ja-hover: #302b29;
+    --ja-text: #f3eeea;
+    --ja-text-2: #d0c9c3;
+    --ja-text-3: #a9a19b;
+    --ja-accent: #ff8a5c;
+    --ja-accent-strong: #ffa37e;
+    --ja-accent-dim: rgba(255, 138, 92, 0.12);
+    --ja-on-accent: #1c1b1b;
+    --ja-amber: #f0a04b;
+    --ja-gold: #f0a04b;
+    --ja-gold-dim: rgba(240, 160, 75, 0.12);
+    --ja-good: #6fcf8e;
+    --ja-good-dim: rgba(111, 207, 142, 0.12);
+    --ja-border: rgba(243, 238, 234, 0.12);
+    --ja-border-hover: rgba(243, 238, 234, 0.26);
+    --ja-border-strong: rgba(243, 238, 234, 0.4);
+    --ja-border-accent: rgba(255, 138, 92, 0.4);
+    --ja-scrim: rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Inside the Hermes dashboard the active theme supplies the colors. */
+.jobapps-root.jobapps-embedded {
+  --ja-bg: transparent;
+  --ja-raised: var(--color-card, transparent);
+  --ja-sunk: var(--color-muted, rgba(127, 127, 127, 0.14));
+  --ja-surface: var(--color-muted, rgba(127, 127, 127, 0.14));
+  --ja-hover: var(--color-accent, rgba(127, 127, 127, 0.2));
+  --ja-text: var(--color-foreground, currentColor);
+  --ja-text-2: var(--color-muted-foreground, currentColor);
+  --ja-text-3: var(--color-muted-foreground, currentColor);
+  --ja-accent: var(--color-primary, currentColor);
+  --ja-accent-strong: var(--color-primary, currentColor);
+  --ja-accent-dim: color-mix(in srgb, var(--color-foreground, currentColor) 10%, transparent);
+  --ja-on-accent: var(--color-primary-foreground, Canvas);
+  --ja-gold: var(--color-foreground, currentColor);
+  --ja-gold-dim: color-mix(in srgb, var(--color-foreground, currentColor) 10%, transparent);
+  --ja-good: var(--color-foreground, currentColor);
+  --ja-good-dim: color-mix(in srgb, var(--color-foreground, currentColor) 10%, transparent);
+  --ja-border: var(--color-border, rgba(127, 127, 127, 0.3));
+  --ja-border-hover: color-mix(in srgb, var(--color-foreground, currentColor) 35%, transparent);
+  --ja-border-strong: color-mix(in srgb, var(--color-foreground, currentColor) 50%, transparent);
+  --ja-border-accent: color-mix(in srgb, var(--color-foreground, currentColor) 45%, transparent);
+  --ja-mono: var(--theme-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+}
+
+.jobapps-root *,
+.jobapps-root *::before,
+.jobapps-root *::after {
+  box-sizing: border-box;
+}
+
+.jobapps-root :focus-visible {
+  outline: 2px solid var(--ja-accent);
+  outline-offset: 2px;
+}
+
+.jobapps-root .ja-main:focus {
+  outline: none;
+}
+
+.jobapps-root .ja-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.jobapps-root .ja-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── Shell: top bar and navigation rail (standalone) ───────────────────── */
+
+.jobapps-root .ja-bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 16px 0 20px;
+  background: var(--ja-raised);
+  border-bottom: 1px solid var(--ja-border);
+}
+
+.jobapps-root .ja-rail-toggle {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ja-text-2);
+  cursor: pointer;
+}
+
+.jobapps-root .ja-rail-toggle:hover {
+  color: var(--ja-text);
+  background: var(--ja-hover);
+}
+
+.jobapps-root .ja-logo {
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
+.jobapps-root .ja-logo-amber {
+  fill: var(--ja-amber);
+}
+
+.jobapps-root .ja-logo-accent {
+  fill: var(--ja-accent);
+}
+
+.jobapps-root .ja-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1;
+}
+
+.jobapps-root .ja-identity-name {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.jobapps-root .ja-identity-sub {
+  color: var(--ja-text-3);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.jobapps-root .ja-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 20px;
+}
+
+.jobapps-root .ja-crumb {
+  color: var(--ja-text-3);
+  font-size: 10px;
+}
+
+.jobapps-root .ja-crumb-page {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jobapps-root .ja-body {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: calc(100vh - 56px);
+}
+
+.jobapps-root .ja-body.is-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+.jobapps-root .ja-rail {
+  min-width: 0;
+  background: var(--ja-raised);
+  border-right: 1px solid var(--ja-border);
+}
+
+.jobapps-root .ja-rail-inner {
+  position: sticky;
+  top: 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: calc(100vh - 56px);
+  padding: 16px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.jobapps-root .ja-rail-label {
+  display: block;
+  margin: 12px 12px 4px;
+  color: var(--ja-text-3);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.jobapps-root .ja-rail-rule {
+  height: 1px;
+  margin: 8px 12px;
+  background: var(--ja-border);
+}
+
+.jobapps-root .ja-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ja-text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-rail-item:hover {
+  color: var(--ja-text);
+  background: var(--ja-hover);
+}
+
+.jobapps-root .ja-rail-item[aria-current="page"] {
+  color: var(--ja-accent);
+  background: var(--ja-accent-dim);
+}
+
+.jobapps-root .ja-body.is-collapsed .ja-nav-label,
+.jobapps-root .ja-body.is-collapsed .ja-rail-label {
+  display: none;
+}
+
+.jobapps-root .ja-body.is-collapsed .ja-rail-inner {
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.jobapps-root .ja-body.is-collapsed .ja-rail-item {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.jobapps-root .ja-rail-backdrop {
+  display: none;
+}
+
+/* ── Shell: one quiet row of tabs (inside the Hermes dashboard) ────────── */
+
+.jobapps-root .ja-toptabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 24px;
+  margin-bottom: 8px;
+}
+
+.jobapps-root .ja-toptab {
+  min-height: 36px;
+  padding: 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ja-text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-toptab:hover {
+  color: var(--ja-text);
+}
+
+.jobapps-root .ja-toptab[aria-current="page"] {
+  border-bottom-color: var(--ja-accent);
+  color: var(--ja-text);
+  font-weight: 600;
+}
+
+/* ── Stage ─────────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-stage {
+  container-type: inline-size;
+  container-name: jobapps;
+  min-width: 0;
+}
+
+.jobapps-root .ja-main {
+  padding: 32px clamp(24px, 4vw, 40px) 64px;
+}
+
+.jobapps-root.jobapps-embedded .ja-main {
+  padding: 16px 0 32px;
+}
+
+.jobapps-root .ja-view {
+  max-width: 1280px;
+  overflow-wrap: anywhere;
+}
+
+.jobapps-root .ja-slot:empty {
+  display: none;
+}
+
+.jobapps-root .ja-notice {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px clamp(24px, 4vw, 40px);
+  background: var(--ja-raised);
+  font-size: 12px;
+}
+
+.jobapps-root.jobapps-embedded .ja-notice {
+  padding: 8px 12px;
+}
+
+.jobapps-root .ja-notice-text {
+  flex: 1;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.jobapps-root .ja-notice-error .ja-notice-text {
+  color: var(--ja-accent);
+}
+
+/* ── Type ──────────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.jobapps-root .ja-page-head-main {
+  min-width: 0;
+}
+
+.jobapps-root .ja-title {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.018em;
+}
+
+.jobapps-root .ja-eyebrow {
+  display: block;
+  margin: 0 0 8px;
+  color: var(--ja-text-3);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.jobapps-root .ja-eyebrow-gold {
+  color: var(--ja-gold);
+}
+
+.jobapps-root .ja-eyebrow-accent {
+  color: var(--ja-accent);
+}
+
+.jobapps-root .ja-h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.jobapps-root .ja-h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.jobapps-root .ja-meta {
+  margin: 0;
+  color: var(--ja-text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.jobapps-root .ja-page-head .ja-meta {
+  margin-top: 8px;
+}
+
+.jobapps-root .ja-date {
+  color: var(--ja-text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.jobapps-root .ja-date.is-past {
+  color: var(--ja-accent);
+}
+
+.jobapps-root .ja-empty {
+  margin: 0;
+  padding: 16px 0;
+  color: var(--ja-text-3);
+}
+
+.jobapps-root .ja-line {
+  margin: 0;
+  font-size: 12px;
+}
+
+.jobapps-root .ja-plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.jobapps-root .ja-section {
+  margin: 0 0 40px;
+}
+
+.jobapps-root .ja-section > .ja-h2 {
+  margin-bottom: 12px;
+}
+
+/* ── Controls: borders live here and on the shell, nowhere else ────────── */
+
+.jobapps-root .ja-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--ja-border);
+  border-radius: 0;
+  background: var(--ja-raised);
+  color: var(--ja-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-btn:hover {
+  border-color: var(--ja-border-hover);
+  background: var(--ja-hover);
+}
+
+.jobapps-root .ja-btn .ja-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.jobapps-root .ja-btn-primary {
+  border-color: var(--ja-accent);
+  background: var(--ja-accent);
+  color: var(--ja-on-accent);
+}
+
+.jobapps-root .ja-btn-primary:hover {
+  border-color: var(--ja-accent-strong);
+  background: var(--ja-accent-strong);
+}
+
+.jobapps-root .ja-quiet {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ja-accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-quiet:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.jobapps-root.jobapps-embedded .ja-quiet {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.jobapps-root .ja-btn[aria-disabled="true"],
+.jobapps-root .ja-quiet[aria-disabled="true"],
+.jobapps-root .ja-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.jobapps-root .ja-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 16px;
+}
+
+.jobapps-root .ja-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--ja-border);
+  border-radius: 0;
+  background: var(--ja-raised);
+  color: var(--ja-text);
+  font: inherit;
+  font-size: 14px;
+}
+
+.jobapps-root .ja-input:focus {
+  border-color: var(--ja-accent);
+}
+
+.jobapps-root .ja-input::placeholder {
+  color: var(--ja-text-3);
+  opacity: 1;
+}
+
+.jobapps-root .ja-search {
+  font-size: 12px;
+}
+
+.jobapps-root .ja-textarea {
+  display: block;
+  padding: 10px 16px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.jobapps-root .ja-select {
+  width: auto;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  background: var(--ja-surface);
+  font-size: 12px;
+}
+
+.jobapps-root .ja-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.jobapps-root .ja-label {
+  margin: 0;
+  color: var(--ja-text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.jobapps-root .ja-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+}
+
+.jobapps-root .ja-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.jobapps-root .ja-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.jobapps-root .ja-form-row > .ja-input {
+  flex: 0 1 auto;
+  width: auto;
+}
+
+.jobapps-root .ja-form-row .ja-select,
+.jobapps-root .ja-field .ja-select {
+  min-height: 40px;
+}
+
+.jobapps-root .ja-dialog .ja-field .ja-select {
+  width: 100%;
+}
+
+.jobapps-root .ja-form-row > .ja-grow,
+.jobapps-root .ja-grow {
+  flex: 1 1 220px;
+  width: auto;
+}
+
+.jobapps-root .ja-form-error {
+  margin: 0;
+  color: var(--ja-accent);
+  font-size: 12px;
+}
+
+.jobapps-root .ja-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-bottom: 32px;
+}
+
+.jobapps-root .ja-toolbar .ja-search {
+  flex: 1 1 240px;
+  width: auto;
+}
+
+.jobapps-root .ja-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.jobapps-root .ja-chip {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--ja-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ja-text-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-chip:hover {
+  border-color: var(--ja-border-hover);
+  color: var(--ja-text-2);
+}
+
+.jobapps-root .ja-chip[aria-pressed="true"] {
+  border-color: var(--ja-border-accent);
+  background: var(--ja-accent-dim);
+  color: var(--ja-accent);
+}
+
+/* A small tinted word. No border, no dot. */
+.jobapps-root .ja-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  background: var(--ja-surface);
+  color: var(--ja-text-2);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.jobapps-root .ja-tone-warn {
+  background: var(--ja-gold-dim);
+  color: var(--ja-gold);
+}
+
+.jobapps-root .ja-tone-good {
+  background: var(--ja-good-dim);
+  color: var(--ja-good);
+}
+
+/* ── Plain numerals ────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-metrics {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: 24px;
+  margin: 0 0 32px;
+}
+
+.jobapps-root .ja-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 0 20px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.jobapps-root div.ja-metric {
+  flex-direction: column-reverse;
+  justify-content: flex-end;
+}
+
+.jobapps-root button.ja-metric {
+  cursor: pointer;
+}
+
+.jobapps-root button.ja-metric:hover {
+  color: var(--ja-accent);
+}
+
+.jobapps-root .ja-metric-value {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.jobapps-root .ja-metric-label {
+  color: var(--ja-text-3);
+  font-size: 12px;
+}
+
+.jobapps-root button.ja-metric:hover .ja-metric-label {
+  color: inherit;
+}
+
+/* ── Overview ──────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 40px;
+  margin-bottom: 40px;
+}
+
+.jobapps-root .ja-focus {
+  min-width: 0;
+  padding-right: 40px;
+}
+
+.jobapps-root .ja-focus-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.jobapps-root .ja-focus-head .ja-eyebrow {
+  margin: 0;
+}
+
+.jobapps-root .ja-focus-company {
+  margin: 0 0 4px;
+  color: var(--ja-text-2);
+  font-weight: 500;
+}
+
+.jobapps-root .ja-focus-title {
+  margin: 0 0 8px;
+  font-size: clamp(24px, 2.2vw, 32px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.jobapps-root .ja-focus-place {
+  margin: 0;
+  color: var(--ja-text-2);
+}
+
+.jobapps-root .ja-next {
+  margin-top: 24px;
+}
+
+.jobapps-root .ja-next .ja-eyebrow {
+  margin-bottom: 4px;
+}
+
+.jobapps-root .ja-next-text {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.jobapps-root .ja-focus-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.jobapps-root .ja-queue {
+  min-width: 0;
+}
+
+.jobapps-root .ja-queue-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.jobapps-root .ja-qrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+  width: 100%;
+  padding: 16px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-qrow-main {
+  display: block;
+  min-width: 0;
+}
+
+.jobapps-root .ja-qrow strong {
+  display: block;
+  font-weight: 500;
+}
+
+.jobapps-root .ja-qrow .ja-meta {
+  display: block;
+  margin-top: 4px;
+}
+
+.jobapps-root .ja-qrow:hover strong {
+  color: var(--ja-accent);
+}
+
+/* `+ Title … count` */
+.jobapps-root .ja-disc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 64px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-disc-sign {
+  flex: none;
+  width: 16px;
+  color: var(--ja-accent);
+  font-size: 20px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.jobapps-root .ja-disc-count {
+  margin-left: auto;
+  color: var(--ja-text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.jobapps-root .ja-disc-body {
+  padding: 0 0 24px 28px;
+}
+
+.jobapps-root .ja-disc-body .ja-qrow {
+  padding: 12px 0;
+}
+
+.jobapps-root .ja-disc-small > .ja-disc-head {
+  min-height: 32px;
+  color: var(--ja-text-2);
+  font-size: 12px;
+}
+
+.jobapps-root .ja-disc-small > .ja-disc-head .ja-disc-sign {
+  font-size: 16px;
+}
+
+.jobapps-root .ja-disc-small > .ja-disc-body {
+  padding-bottom: 8px;
+}
+
+/* ── Jobs: a list beside one focused surface ───────────────────────────── */
+
+.jobapps-root .ja-jobs {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.8fr) minmax(0, 1.6fr);
+  align-items: start;
+  gap: 32px;
+}
+
+/* The list stays in view and scrolls on its own; the job reads down the page. */
+.jobapps-root .ja-jobs-list {
+  position: sticky;
+  top: 80px;
+  max-height: calc(100vh - 104px);
+  overflow-y: auto;
+}
+
+.jobapps-root.jobapps-embedded .ja-jobs-list {
+  top: 16px;
+  max-height: calc(100vh - 32px);
+}
+
+.jobapps-root .ja-jobgroup {
+  margin-bottom: 24px;
+}
+
+.jobapps-root .ja-jobgroup-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 12px;
+  color: var(--ja-text-2);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.jobapps-root .ja-jobgroup-count {
+  color: var(--ja-text);
+  font-weight: 700;
+}
+
+.jobapps-root .ja-jobgroup > .ja-quiet {
+  margin-left: 12px;
+}
+
+.jobapps-root .ja-jobrow {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 16px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-jobrow:hover {
+  background: var(--ja-surface);
+}
+
+.jobapps-root .ja-jobrow[aria-current="true"] {
+  background: var(--ja-accent-dim);
+}
+
+.jobapps-root .ja-jobrow-company {
+  color: var(--ja-text-2);
+  font-size: 12px;
+}
+
+.jobapps-root .ja-jobrow-title {
+  margin: 4px 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.jobapps-root .ja-detail {
+  min-width: 0;
+  padding: 24px;
+  background: var(--ja-raised);
+}
+
+.jobapps-root .ja-back {
+  display: none;
+}
+
+.jobapps-root .ja-detail-head .ja-eyebrow {
+  margin-bottom: 4px;
+}
+
+.jobapps-root .ja-detail-title {
+  margin: 0;
+  font-size: 32px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.jobapps-root .ja-detail-place {
+  margin: 8px 0 0;
+  color: var(--ja-text-2);
+}
+
+.jobapps-root .ja-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  margin: 20px 0;
+}
+
+.jobapps-root .ja-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jobapps-root .ja-status .ja-eyebrow {
+  margin: 0;
+}
+
+.jobapps-root .ja-detail .ja-line {
+  margin-bottom: 8px;
+}
+
+.jobapps-root .ja-block {
+  padding: 20px 0;
+}
+
+.jobapps-root .ja-block > .ja-label {
+  margin-bottom: 8px;
+}
+
+.jobapps-root .ja-block .ja-next-text {
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.jobapps-root .ja-next-text.is-none {
+  color: var(--ja-text-3);
+}
+
+.jobapps-root .ja-block > .ja-links {
+  margin-top: 8px;
+}
+
+.jobapps-root .ja-mat {
+  padding: 12px 0;
+}
+
+.jobapps-root .ja-mat-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 4px 20px;
+}
+
+.jobapps-root .ja-mat-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.jobapps-root .ja-mat-name {
+  font-weight: 500;
+}
+
+.jobapps-root .ja-mat-main .ja-meta {
+  margin-top: 4px;
+}
+
+.jobapps-root .ja-mat-state {
+  padding-top: 7px;
+  color: var(--ja-text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.jobapps-root .ja-finding-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.jobapps-root .ja-finding-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+
+.jobapps-root .ja-finding-list strong {
+  font-weight: 600;
+}
+
+.jobapps-root .ja-quote {
+  color: var(--ja-text-2);
+}
+
+.jobapps-root .ja-detail .ja-disc-head {
+  min-height: 56px;
+}
+
+.jobapps-root .ja-detail .ja-disc-small > .ja-disc-head {
+  min-height: 32px;
+}
+
+.jobapps-root .ja-sub {
+  margin: 20px 0 8px;
+}
+
+.jobapps-root .ja-record {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 0 0 16px;
+  font-size: 12px;
+}
+
+.jobapps-root .ja-record dt {
+  color: var(--ja-text-3);
+}
+
+.jobapps-root .ja-record dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 12px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.jobapps-root .ja-record .ja-quiet {
+  min-height: 24px;
+}
+
+.jobapps-root .ja-path {
+  overflow-wrap: anywhere;
+}
+
+.jobapps-root .ja-mini-person .ja-links {
+  margin-top: -8px;
+}
+
+/* A small list of choices under a quiet link. */
+.jobapps-root .ja-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.jobapps-root .ja-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  padding: 4px;
+  border: 1px solid var(--ja-border-strong);
+  background: var(--ja-raised);
+}
+
+.jobapps-root .ja-menu[hidden] {
+  display: none;
+}
+
+.jobapps-root.jobapps-embedded .ja-menu {
+  background: var(--color-popover, var(--color-card, Canvas));
+}
+
+.jobapps-root .ja-menu-item {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ja-text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-menu-item:hover,
+.jobapps-root .ja-menu-item:focus {
+  background: var(--ja-surface);
+}
+
+/* ── People ────────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-person {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 96px;
+  align-items: start;
+  gap: 20px 24px;
+  margin-bottom: 12px;
+  padding: 20px 0;
+}
+
+.jobapps-root .ja-person-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.jobapps-root .ja-person-name {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.jobapps-root .ja-person-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 12px;
+  margin-top: 4px;
+}
+
+.jobapps-root .ja-person-meta .ja-quiet {
+  min-height: 24px;
+}
+
+.jobapps-root .ja-person-why {
+  max-width: 70ch;
+  margin: 8px 0 0;
+  color: var(--ja-text-2);
+}
+
+.jobapps-root .ja-person-date {
+  padding-top: 7px;
+  text-align: right;
+}
+
+.jobapps-root .ja-person-links {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* ── Leads ─────────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-lead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 32px;
+  padding: 16px 0;
+}
+
+.jobapps-root .ja-lead-core {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.jobapps-root .ja-lead-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 4px 0;
+}
+
+.jobapps-root .ja-lead-line .ja-jobrow-title {
+  margin: 0;
+}
+
+/* ── Insights ──────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-caption {
+  max-width: 78ch;
+  margin: -12px 0 40px;
+  color: var(--ja-text-2);
+}
+
+.jobapps-root .ja-table {
+  width: 100%;
+  max-width: 760px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.jobapps-root .ja-table th:first-child {
+  width: 26%;
+}
+
+.jobapps-root .ja-table th,
+.jobapps-root .ja-table td {
+  padding: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--ja-border);
+  font-weight: 400;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.jobapps-root .ja-table tbody tr:last-child th,
+.jobapps-root .ja-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.jobapps-root .ja-table th:first-child {
+  padding-left: 0;
+}
+
+.jobapps-root .ja-table thead th {
+  color: var(--ja-text-3);
+  white-space: nowrap;
+}
+
+.jobapps-root .ja-table tbody th {
+  font-size: 14px;
+  overflow-wrap: break-word;
+}
+
+.jobapps-root .ja-table .ja-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.jobapps-root .ja-table th:nth-child(2),
+.jobapps-root .ja-table .ja-meter-cell {
+  width: 35%;
+  white-space: nowrap;
+}
+
+.jobapps-root .ja-meter {
+  display: inline-block;
+  width: calc(100% - 5ch);
+  height: 4px;
+  background: var(--ja-sunk);
+  vertical-align: middle;
+}
+
+.jobapps-root .ja-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--ja-accent);
+}
+
+.jobapps-root .ja-meter-number {
+  display: inline-block;
+  min-width: 5ch;
+}
+
+/* ── Library ───────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-library {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  align-items: start;
+  gap: 32px;
+}
+
+.jobapps-root .ja-lib-list {
+  max-height: calc(100vh - 190px);
+  overflow-y: auto;
+}
+
+.jobapps-root .ja-lib-label {
+  margin: 24px 12px 8px;
+}
+
+.jobapps-root .ja-lib-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 40px;
+  justify-content: center;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jobapps-root .ja-lib-item:hover {
+  background: var(--ja-surface);
+}
+
+.jobapps-root .ja-lib-item[aria-current="true"] {
+  background: var(--ja-accent-dim);
+}
+
+.jobapps-root .ja-lib-item.is-dim .ja-lib-title {
+  color: var(--ja-text-3);
+}
+
+.jobapps-root .ja-lib-title {
+  font-weight: 500;
+}
+
+.jobapps-root .ja-doc {
+  min-width: 0;
+  padding: 32px 40px;
+  background: var(--ja-raised);
+}
+
+.jobapps-root .ja-doc > * {
+  max-width: 70ch;
+}
+
+.jobapps-root .ja-doc-title {
+  margin: 0 0 16px;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.jobapps-root .ja-doc .ja-record {
+  margin-top: 32px;
+}
+
+.jobapps-root .ja-doc-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 12px;
+  margin: 8px 0 0;
+  color: var(--ja-text-3);
+  font-size: 12px;
+}
+
+/* ── Rendered Markdown ─────────────────────────────────────────────────── */
+
+.jobapps-root .ja-md {
+  max-width: 70ch;
+  overflow-wrap: anywhere;
+}
+
+.jobapps-root .ja-md p {
+  margin: 0 0 10px;
+}
+
+.jobapps-root .ja-md h3,
+.jobapps-root .ja-md h4,
+.jobapps-root .ja-md h5,
+.jobapps-root .ja-md h6 {
+  margin: 24px 0 8px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.jobapps-root .ja-md .ja-md-h1 {
+  font-size: 20px;
+}
+
+.jobapps-root .ja-md .ja-md-h2 {
+  font-size: 16px;
+}
+
+.jobapps-root .ja-md .ja-md-h3,
+.jobapps-root .ja-md .ja-md-h4 {
+  font-size: 14px;
+}
+
+.jobapps-root .ja-md > :first-child {
+  margin-top: 0;
+}
+
+.jobapps-root .ja-md > :last-child {
+  margin-bottom: 0;
+}
+
+.jobapps-root .ja-md ul,
+.jobapps-root .ja-md ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.jobapps-root .ja-md ul {
+  list-style: disc;
+}
+
+.jobapps-root .ja-md ol {
+  list-style: decimal;
+}
+
+.jobapps-root .ja-md li {
+  margin: 2px 0;
+}
+
+.jobapps-root .ja-md li > ul,
+.jobapps-root .ja-md li > ol {
+  margin: 2px 0;
+}
+
+.jobapps-root .ja-md a {
+  color: var(--ja-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.jobapps-root .ja-md code,
+.jobapps-root .ja-source {
+  font-family: var(--ja-mono);
+  font-size: 12px;
+}
+
+.jobapps-root .ja-md code {
+  padding: 1px 4px;
+  background: var(--ja-surface);
+}
+
+.jobapps-root .ja-md pre {
+  margin: 0 0 10px;
+  padding: 12px;
+  overflow: auto;
+  background: var(--ja-surface);
+}
+
+.jobapps-root .ja-md pre code {
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.jobapps-root .ja-md hr {
+  height: 0;
+  margin: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--ja-border);
+}
+
+/* ── Dialogs ───────────────────────────────────────────────────────────── */
+
+.jobapps-root .ja-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100vh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--ja-border-strong);
+  border-radius: 0;
+  background: var(--ja-raised);
+  color: var(--ja-text);
+  font: inherit;
+}
+
+.jobapps-root.jobapps-embedded .ja-dialog {
+  background: var(--color-popover, var(--color-card, Canvas));
+}
+
+.jobapps-root .ja-dialog:not([open]) {
+  display: none;
+}
+
+.jobapps-root .ja-dialog-wide {
+  width: min(880px, calc(100vw - 32px));
+}
+
+.jobapps-root .ja-dialog::backdrop {
+  background: rgba(28, 27, 27, 0.3);
+}
+
+.jobapps-root .ja-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 24px;
+}
+
+.jobapps-root .ja-dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.jobapps-root .ja-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.jobapps-root .ja-result .ja-line {
+  margin: 0 0 4px;
+}
+
+.jobapps-root .ja-source {
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  background: var(--ja-surface);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── The navigation rail on a narrow window ────────────────────────────── */
+
+@media (max-width: 720px) {
+  .jobapps-root .ja-body,
+  .jobapps-root .ja-body.is-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .jobapps-root .ja-rail {
+    position: fixed;
+    top: 56px;
+    bottom: 0;
+    left: 0;
+    z-index: 25;
+    display: none;
+    width: 220px;
+    overflow-y: auto;
+  }
+
+  .jobapps-root .ja-body.is-rail-open .ja-rail {
+    display: block;
+  }
+
+  .jobapps-root .ja-rail-inner,
+  .jobapps-root .ja-body.is-collapsed .ja-rail-inner {
+    position: static;
+    max-height: none;
+    padding: 16px 12px;
+  }
+
+  .jobapps-root .ja-body.is-collapsed .ja-nav-label,
+  .jobapps-root .ja-body.is-collapsed .ja-rail-label {
+    display: block;
+  }
+
+  .jobapps-root .ja-body.is-collapsed .ja-rail-item {
+    justify-content: flex-start;
+    padding: 8px 12px;
+  }
+
+  .jobapps-root .ja-rail-item {
+    min-height: 44px;
+  }
+
+  .jobapps-root .ja-body.is-rail-open .ja-rail-backdrop {
+    position: fixed;
+    top: 56px;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 24;
+    display: block;
+    padding: 0;
+    border: 0;
+    background: var(--ja-scrim);
+  }
+
+  .jobapps-root .ja-crumbs {
+    padding: 0 8px;
+  }
+}
+
+/* ── Narrow pages follow the stage's own width ─────────────────────────── */
+
+@container jobapps (max-width: 900px) {
+  .jobapps-root .ja-jobs {
+    display: block;
+  }
+
+  .jobapps-root .ja-jobs-list,
+  .jobapps-root.jobapps-embedded .ja-jobs-list {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
+
+  .jobapps-root .ja-detail {
+    display: none;
+    padding: 20px;
+  }
+
+  .jobapps-root .ja-view-jobs.has-job .ja-detail {
+    display: block;
+  }
+
+  .jobapps-root .ja-view-jobs.has-job .ja-jobs-list,
+  .jobapps-root .ja-view-jobs.has-job .ja-toolbar,
+  .jobapps-root .ja-view-jobs.has-job .ja-page-head {
+    display: none;
+  }
+
+  .jobapps-root .ja-back {
+    display: inline-flex;
+    margin-bottom: 20px;
+  }
+
+  .jobapps-root .ja-library {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .jobapps-root .ja-lib-list {
+    max-height: 40vh;
+  }
+
+  .jobapps-root .ja-doc {
+    padding: 24px 20px;
+  }
+}
+
+@container jobapps (max-width: 720px) {
+  .jobapps-root .ja-main {
+    padding: 24px 20px 48px;
+  }
+
+  .jobapps-root.jobapps-embedded .ja-main {
+    padding: 16px 0 32px;
+  }
+
+  .jobapps-root .ja-page-head {
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 24px;
+  }
+
+  .jobapps-root .ja-title {
+    font-size: 28px;
+  }
+
+  .jobapps-root .ja-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: row;
+    gap: 16px;
+  }
+
+  .jobapps-root .ja-metric {
+    padding-bottom: 12px;
+  }
+
+  .jobapps-root .ja-metric-value {
+    font-size: 24px;
+  }
+
+  .jobapps-root .ja-summary {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+
+  .jobapps-root .ja-focus {
+    padding: 0;
+  }
+
+  .jobapps-root .ja-focus-title,
+  .jobapps-root .ja-detail-title {
+    font-size: 28px;
+  }
+
+  .jobapps-root .ja-btn,
+  .jobapps-root .ja-chip,
+  .jobapps-root .ja-quiet {
+    min-height: 44px;
+  }
+
+  .jobapps-root .ja-record .ja-quiet,
+  .jobapps-root .ja-person-meta .ja-quiet {
+    min-height: 32px;
+  }
+
+  .jobapps-root .ja-disc-count {
+    display: none;
+  }
+
+  .jobapps-root .ja-disc-body {
+    padding-left: 0;
+  }
+
+  .jobapps-root .ja-mat-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .jobapps-root .ja-mat-row .ja-links {
+    grid-column: 1 / -1;
+  }
+
+  .jobapps-root .ja-person {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
+  }
+
+  .jobapps-root .ja-person-links {
+    flex-direction: row;
+    gap: 16px;
+  }
+
+  .jobapps-root .ja-person-date {
+    padding: 4px 0 0;
+    text-align: left;
+  }
+
+  .jobapps-root .ja-person-date:empty {
+    display: none;
+  }
+
+  .jobapps-root .ja-lead {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .jobapps-root .ja-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .jobapps-root .ja-table th,
+  .jobapps-root .ja-table td {
+    padding: 8px 4px;
+  }
+
+  .jobapps-root .ja-table {
+    table-layout: auto;
+  }
+
+  .jobapps-root .ja-table th:first-child,
+  .jobapps-root .ja-table th:nth-child(2),
+  .jobapps-root .ja-table .ja-meter-cell {
+    width: auto;
+  }
+
+  .jobapps-root .ja-meter {
+    width: 40px;
+  }
+
+  .jobapps-root .ja-meter-number {
+    min-width: 4ch;
+  }
+
+  .jobapps-root .ja-dialog-body {
+    padding: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .jobapps-root .ja-btn,
+  .jobapps-root .ja-chip,
+  .jobapps-root .ja-rail-item,
+  .jobapps-root .ja-jobrow,
+  .jobapps-root .ja-metric,
+  .jobapps-root .ja-qrow strong {
+    transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+  }
+}

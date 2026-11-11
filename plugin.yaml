@@ -1,0 +1,30 @@
+manifest_version: 2
+name: jobapps
+version: "1.0.0"
+description: A job-search workspace of plain files with tracking, tailored documents, checks and networking.
+author: Prashant Shah
+license: MIT
+homepage: https://github.com/Prashant002-1/hermes-jobapps
+kind: standalone
+requires_hermes: ">=0.21.0"
+tags: [career, jobs, resume, productivity]
+provides_tools:
+  - jobapps_overview
+  - jobapps_brief
+  - jobapps_add_job
+  - jobapps_track
+  - jobapps_check
+  - jobapps_find_jobs
+  - jobapps_find_people
+  - jobapps_person
+  - jobapps_gmail_draft
+provides_hooks: []
+optional_env:
+  - EXA_API_KEY
+  - JOBAPPS_HOME
+config_schema:
+  workspace:
+    type: string
+    default: ""
+    label: Workspace folder
+    description: Where the job-search files live. Empty uses JOBAPPS_HOME or ~/JobApps.

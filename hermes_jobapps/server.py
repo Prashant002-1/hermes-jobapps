@@ -1,901 +1,311 @@
-"""Local HTTP server for the Hermes JobApps cockpit."""
+"""Local cockpit host.
+
+Serves the browser UI from dashboard/dist and the cockpit API from
+`api.handle`. It binds to 127.0.0.1 only and refuses requests that were not
+addressed to this computer.
+"""
 
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import gzip
 import json
-import mimetypes
+import os
 import re
+import sys
 import threading
-import time
-from http import HTTPStatus
+import traceback
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlsplit
 
-from .chat import ChatOrchestrator
-from .config import PROJECT_ROOT, load_config, resolve_project_path, save_config_overlay
-from .discovery import DiscoveryError, DiscoveryService
-from .hermes_commands import HermesCommandError, HermesSlashClient
-from .hermes_client import HermesAPIError, HermesClient
-from .repository import JobRepository
-from .runs import ACTIVE_STATUSES, HermesRunManager
-from .tools import AgentToolbox
-from .workflow import JobAppsWorkflow
+from . import api
+from .workspace import Workspace, clip
 
 
-WEB_ROOT = PROJECT_ROOT / "web"
-DESIGN_ROOT = PROJECT_ROOT / "design-system"
-COCKPIT_JOB_STATUSES = {
-    "new": "Review the role and run blocker preflight.",
-    "applied": "Record application details and watch for replies.",
-    "skip": "Skip this role and preserve the reason.",
+DIST = Path(__file__).resolve().parents[1] / "dashboard" / "dist"
+MAX_BODY_BYTES = 2 * 1024 * 1024
+DRAIN_LIMIT_BYTES = 16 * 1024 * 1024
+GZIP_MIN_BYTES = 1024
+
+STATIC_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
 }
-COCKPIT_STATUS_ALIASES = {
-    "inbox": "new",
-    "ready": "new",
-    "ready_to_apply": "new",
-    "preparing": "new",
-    "waiting": "applied",
-    "closed": "applied",
-    "skipped": "skip",
-    "not_interested": "skip",
-    "not_needed": "skip",
-}
-ACTION_ITEM_STATUSES = {"open", "pending", "done", "dismissed", "not_needed", "canceled", "cancelled"}
-ACTION_STATUS_ALIASES = {
-    "complete": "done",
-    "completed": "done",
-    "mark_done": "done",
-    "mark_complete": "done",
-    "not needed": "not_needed",
-    "not-needed": "not_needed",
-    "skip": "not_needed",
-    "cancel": "canceled",
+_LONG_CACHED = {".woff2"}
+_COMPRESSIBLE = {".html", ".js", ".css", ".json", ".svg"}
+_TEXT_SUFFIXES = {".md", ".typ", ".tex", ".txt", ".json"}
+_FILE_TYPES = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
-
-class AppState:
-    def __init__(self, config_path: str | None, db_path: str | None) -> None:
-        self.config = load_config(config_path)
-        configured_db = db_path or self.config.get("database_path") or "data/hermes-jobapps.sqlite3"
-        self.repo = JobRepository(resolve_project_path(configured_db))
-        self.toolbox = AgentToolbox(self.repo, self.config)
-        self.discovery = DiscoveryService(self.repo, self.config)
-        self.workflow = JobAppsWorkflow(self.repo, self.toolbox)
-        hermes_config = self.config.get("hermes", {})
-        self.hermes_session_key = hermes_config.get("session_key", "jobapps")
-        self.hermes_profile = hermes_config.get("profile") or hermes_config.get("recommended_profile", "jobapps")
-        self.hermes = HermesClient(
-            base_url=hermes_config.get("api_base"),
-            api_key=hermes_config.get("api_key"),
-            model=hermes_config.get("model"),
-        )
-        self.slash = HermesSlashClient(
-            profile=self.hermes_profile,
-            model=hermes_config.get("slash_model") or "",
-            timeout=float(hermes_config.get("slash_timeout_seconds", 45)),
-            python_path=hermes_config.get("slash_python", ""),
-        )
-        self.runs = HermesRunManager(
-            self.repo,
-            self.toolbox,
-            self.hermes,
-            session_key=self.hermes_session_key,
-        )
-        self.chat = ChatOrchestrator(
-            repo=self.repo,
-            toolbox=self.toolbox,
-            workflow=self.workflow,
-            runs=self.runs,
-            hermes=self.hermes,
-            slash=self.slash,
-            session_key=self.hermes_session_key,
-        )
-        self.command_catalog_cache: dict[str, Any] | None = None
-        self._state_condition = threading.Condition()
-        self.state_version = 0
-        self.state_changed_at = self._state_timestamp()
-        self._state_cache_version = -1
-        self._state_cache_payload: dict[str, Any] | None = None
-        self._db_state_token = self._current_db_state_token()
-        self.repo.on_change = self.mark_state_changed
-
-    @staticmethod
-    def _state_timestamp() -> str:
-        return datetime.now(timezone.utc).isoformat()
-
-    def _state_meta_locked(self) -> dict[str, Any]:
-        return {
-            "state_version": self.state_version,
-            "state_changed_at": self.state_changed_at,
-        }
-
-    def _current_db_state_token(self) -> tuple[int, str]:
-        revision = self.repo.state_revision()
-        return (int(revision.get("revision") or 0), str(revision.get("updated_at") or ""))
-
-    def _mark_state_changed_locked(self, db_token: tuple[int, str]) -> None:
-        self._db_state_token = db_token
-        self.state_version += 1
-        self.state_changed_at = self._state_timestamp()
-        self._state_cache_version = -1
-        self._state_cache_payload = None
-        self._state_condition.notify_all()
-
-    def mark_state_changed(self, *, force: bool = False) -> None:
-        db_token = self._current_db_state_token()
-        with self._state_condition:
-            if not force and db_token == self._db_state_token:
-                return
-            self._mark_state_changed_locked(db_token)
-
-    def sync_external_state(self) -> None:
-        db_token = self._current_db_state_token()
-        with self._state_condition:
-            if db_token != self._db_state_token:
-                self._mark_state_changed_locked(db_token)
-
-    def state_meta(self) -> dict[str, Any]:
-        self.sync_external_state()
-        with self._state_condition:
-            return self._state_meta_locked()
-
-    def wait_for_state_change(self, last_version: int, *, timeout: float = 25.0) -> dict[str, Any]:
-        deadline = time.monotonic() + timeout
-        while True:
-            self.sync_external_state()
-            with self._state_condition:
-                if self.state_version > last_version:
-                    return self._state_meta_locked()
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return self._state_meta_locked()
-                self._state_condition.wait(timeout=min(1.0, remaining))
-
-    def full_state(self) -> dict[str, Any]:
-        self.sync_external_state()
-        with self._state_condition:
-            if self._state_cache_version == self.state_version and self._state_cache_payload is not None:
-                return self._state_cache_payload
-            version = self.state_version
-            changed_at = self.state_changed_at
-
-        payload = self.repo.dashboard() | {
-            "tool_specs": self.toolbox.specs(),
-            "criteria": self.config.get("criteria", {}),
-            "state_version": version,
-            "state_changed_at": changed_at,
-        }
-
-        with self._state_condition:
-            if self.state_version == version:
-                self._state_cache_version = version
-                self._state_cache_payload = payload
-        return payload
+_LOCAL = r"(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?"
+_LOCAL_HOST = re.compile(_LOCAL, re.IGNORECASE)
+_LOCAL_ORIGIN = re.compile(rf"https?://{_LOCAL}", re.IGNORECASE)
 
 
-def create_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
-    class Handler(BaseHTTPRequestHandler):
-        server_version = "HermesJobApps/0.2"
+def file_content_type(path: Path) -> str:
+    """Content type for a workspace file. Source text is always sent as plain text."""
+    suffix = path.suffix.lower()
+    if suffix in _TEXT_SUFFIXES:
+        return "text/plain; charset=utf-8"
+    return _FILE_TYPES.get(suffix, "application/octet-stream")
 
-        def do_GET(self) -> None:
-            self._handle_read(head=False)
 
-        def do_HEAD(self) -> None:
-            self._handle_read(head=True)
+def _accepts_gzip(header: str) -> bool:
+    for part in header.split(","):
+        name, _, params = part.strip().partition(";")
+        if name.strip().lower() not in ("gzip", "x-gzip", "*"):
+            continue
+        quality = params.replace(" ", "").lower()
+        if quality.startswith("q="):
+            try:
+                return float(quality[2:]) > 0
+            except ValueError:
+                return False
+        return True
+    return False
 
-        def _handle_read(self, *, head: bool) -> None:
-            parsed = urlparse(self.path)
-            request_path = parsed.path
-            if request_path in {"/", "/index.html"}:
-                self._serve_file(WEB_ROOT / "index.html", "text/html; charset=utf-8", head=head)
-                return
-            if request_path.startswith("/static/"):
-                requested = request_path.removeprefix("/static/")
-                self._serve_file(WEB_ROOT / requested, root=WEB_ROOT, head=head)
-                return
-            if request_path.startswith("/assets/"):
-                requested = request_path.removeprefix("/assets/")
-                self._serve_file(WEB_ROOT / "assets" / requested, root=WEB_ROOT / "assets", head=head)
-                return
-            if request_path.startswith("/design-system/"):
-                requested = request_path.removeprefix("/design-system/")
-                self._serve_file(DESIGN_ROOT / requested, root=DESIGN_ROOT, head=head)
-                return
-            if request_path == "/api/state":
-                if head:
-                    self._empty_json()
-                    return
-                self._json(state.full_state())
-                return
-            if request_path == "/api/state/version":
-                if head:
-                    self._empty_json()
-                    return
-                self._json(state.state_meta())
-                return
-            if request_path == "/api/state/events":
-                if head:
-                    self._empty_json()
-                    return
-                query = parse_qs(parsed.query)
-                try:
-                    last_version = int((query.get("after") or ["-1"])[0])
-                except ValueError:
-                    last_version = -1
-                self._start_sse()
-                try:
-                    meta = state.state_meta()
-                    self._sse("state", meta)
-                    last_version = int(meta.get("state_version", last_version))
-                    while True:
-                        meta = state.wait_for_state_change(last_version)
-                        current_version = int(meta.get("state_version", last_version))
-                        if current_version == last_version:
-                            self._sse("heartbeat", meta)
-                        else:
-                            self._sse("state", meta)
-                            last_version = current_version
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-                return
-            if request_path == "/api/hermes/status":
-                if head:
-                    self._empty_json()
-                    return
-                self._json(self._hermes_status())
-                return
-            if request_path == "/api/hermes/commands":
-                if head:
-                    self._empty_json()
-                    return
-                try:
-                    self._json(self._hermes_commands())
-                except HermesCommandError as exc:
-                    self._json({"error": str(exc), "commands": [], "categories": []}, HTTPStatus.BAD_GATEWAY)
-                return
-            if request_path == "/api/hermes/sessions":
-                if head:
-                    self._empty_json()
-                    return
-                try:
-                    sessions = state.slash.sessions(limit=300)
-                    self._json(
-                        {
-                            "profile": state.hermes_profile,
-                            "sessions": sessions.get("sessions", []),
-                        }
-                    )
-                except HermesCommandError as exc:
-                    self._json({"error": str(exc), "sessions": []}, HTTPStatus.BAD_GATEWAY)
-                return
-            if request_path == "/api/criteria":
-                if head:
-                    self._empty_json()
-                    return
-                self._json(state.config.get("criteria", {}))
-                return
-            if request_path == "/api/discovery/status":
-                if head:
-                    self._empty_json()
-                    return
-                self._json(state.discovery.status())
-                return
-            if request_path == "/api/discovery/candidates":
-                if head:
-                    self._empty_json()
-                    return
-                query = parse_qs(parsed.query)
-                limit = _read_limit((query.get("limit") or ["80"])[0], default=80, maximum=300)
-                status = (query.get("status") or ["all"])[0]
-                self._json(
-                    {
-                        "candidates": state.repo.list_discovery_candidates(status=status, limit=limit),
-                        "counts": state.repo.discovery_counts(),
-                    }
-                )
-                return
-            match = re.fullmatch(r"/api/materials/([A-Za-z0-9_-]{1,64})", request_path)
-            if match:
-                if head:
-                    self._empty_json()
-                    return
-                try:
-                    self._json(state.repo.get_material(match.group(1)))
-                except KeyError:
-                    self._json({"error": "Material not found"}, HTTPStatus.NOT_FOUND)
-                return
-            match = re.fullmatch(r"/api/materials/([A-Za-z0-9_-]{1,64})/file", request_path)
-            if match:
-                try:
-                    material = state.repo.get_material(match.group(1))
-                    query = parse_qs(parsed.query)
-                    target = (query.get("target") or ["source"])[0]
-                    file_path = self._material_file_path(material, target)
-                    self._serve_local_artifact(file_path, root=self._materials_root(), head=head)
-                except KeyError:
-                    self._json({"error": "Material not found"}, HTTPStatus.NOT_FOUND)
-                except ValueError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
-            match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})", request_path)
-            if match:
-                if head:
-                    self._empty_json()
-                    return
-                try:
-                    self._json(state.repo.get_job(match.group(1)))
-                except KeyError:
-                    self._json({"error": "Job not found"}, HTTPStatus.NOT_FOUND)
-                return
-            match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})/hermes-run", request_path)
-            if match:
-                if head:
-                    self._empty_json()
-                    return
-                try:
-                    self._json(state.runs.refresh_for_job(match.group(1)))
-                except KeyError:
-                    self._json({"error": "Job not found"}, HTTPStatus.NOT_FOUND)
-                return
-            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
-        def do_POST(self) -> None:
-            if self.path == "/api/jobs/prepare":
-                payload = self._read_json()
-                try:
-                    record = state.workflow.prepare_opportunity(payload)
-                except ValueError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                    return
-                self._json(record, HTTPStatus.CREATED)
-                return
+def create_handler(ws: Workspace) -> type[BaseHTTPRequestHandler]:
+    write_lock = threading.Lock()
 
-            if self.path == "/api/discovery/search":
-                payload = self._read_json()
-                try:
-                    result = state.discovery.search_exa(
-                        str(payload.get("query") or ""),
-                        limit=_read_limit(payload.get("limit", 8), default=8, maximum=25),
-                        hydrate=bool(payload.get("hydrate", True)),
-                    )
-                    self._json(result, HTTPStatus.CREATED)
-                except DiscoveryError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
+    class CockpitHandler(BaseHTTPRequestHandler):
+        server_version = "JobApps"
+        sys_version = ""
+        protocol_version = "HTTP/1.1"
+        timeout = 30
 
-            if self.path == "/api/discovery/hydrate":
-                payload = self._read_json()
-                try:
-                    candidate = state.discovery.hydrate_url(str(payload.get("url") or ""))
-                    self._json({"candidate": candidate}, HTTPStatus.CREATED)
-                except DiscoveryError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
-
-            if self.path == "/api/discovery/candidates/prepare-approved":
-                payload = self._read_json()
-                try:
-                    result = state.discovery.prepare_approved_candidates(
-                        state.workflow.prepare_opportunity,
-                        limit=_read_limit(payload.get("limit", 3), default=3, maximum=10),
-                    )
-                    self._json(result, HTTPStatus.CREATED)
-                except DiscoveryError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
-
-            match = re.fullmatch(r"/api/discovery/candidates/([a-f0-9]{12})/prepare", self.path)
-            if match:
-                try:
-                    result = state.discovery.prepare_candidate(match.group(1), state.workflow.prepare_opportunity)
-                    self._json(result, HTTPStatus.CREATED)
-                except KeyError:
-                    self._json({"error": "Discovery candidate not found"}, HTTPStatus.NOT_FOUND)
-                except ValueError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
-
-            match = re.fullmatch(r"/api/discovery/candidates/([a-f0-9]{12})/status", self.path)
-            if match:
-                payload = self._read_json()
-                try:
-                    candidate = state.repo.update_discovery_candidate(
-                        match.group(1),
-                        status=payload.get("status"),
-                        note=str(payload.get("note") or ""),
-                    )
-                    self._json({"candidate": candidate})
-                except KeyError:
-                    self._json({"error": "Discovery candidate not found"}, HTTPStatus.NOT_FOUND)
-                except ValueError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
-
-            if self.path == "/api/hermes/chat/stream":
-                payload = self._read_json()
-                message = str(payload.get("message") or "").strip()
-                if not message:
-                    self._json({"error": "Message is required."}, HTTPStatus.BAD_REQUEST)
-                    return
-                conversation_history = payload.get("conversation_history")
-                if not isinstance(conversation_history, list):
-                    conversation_history = None
-                self._start_sse()
-                try:
-                    for event in state.chat.stream(
-                        message,
-                        conversation=str(payload.get("conversation") or "jobapps-cockpit"),
-                        conversation_history=conversation_history,
-                    ):
-                        self._sse(str(event.get("type") or "message"), event)
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-                except (ValueError, HermesAPIError, HermesCommandError) as exc:
-                    self._sse("error", {"type": "error", "message": str(exc)})
-                except Exception as exc:  # noqa: BLE001
-                    self._sse("error", {"type": "error", "message": f"JobApps stream failed: {exc}"})
-                return
-
-            if self.path == "/api/hermes/chat":
-                payload = self._read_json()
-                message = str(payload.get("message") or "").strip()
-                if not message:
-                    self._json({"error": "Message is required."}, HTTPStatus.BAD_REQUEST)
-                    return
-                conversation_history = payload.get("conversation_history")
-                if not isinstance(conversation_history, list):
-                    conversation_history = None
-                try:
-                    result = state.chat.handle(
-                        message,
-                        conversation=str(payload.get("conversation") or "jobapps-cockpit"),
-                        conversation_history=conversation_history,
-                    )
-                    self._json(result)
-                except ValueError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                except HermesAPIError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
-                return
-
-            if self.path == "/api/hermes/sessions/resume":
-                payload = self._read_json()
-                session_id = str(payload.get("session_id") or "").strip()
-                if not session_id:
-                    self._json({"error": "session_id is required."}, HTTPStatus.BAD_REQUEST)
-                    return
-                try:
-                    self._json(state.slash.resume_session(session_id))
-                except HermesCommandError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
-                return
-
-            if self.path == "/api/jobs/hermes-runs":
-                payload = self._read_json()
-                raw_job_ids = payload.get("job_ids")
-                if isinstance(raw_job_ids, list):
-                    job_ids = [str(item) for item in raw_job_ids if re.fullmatch(r"[a-f0-9]{12}", str(item))]
-                else:
-                    job_ids = _pending_hermes_job_ids(state.full_state().get("jobs", []))
-                result = state.runs.start_for_jobs(job_ids)
-                self._json(result | {"state": state.full_state()}, HTTPStatus.ACCEPTED)
-                return
-
-            match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})/hermes-run", self.path)
-            if match:
-                job_id = match.group(1)
-                try:
-                    self._json(state.runs.start_for_job(job_id), HTTPStatus.ACCEPTED)
-                except KeyError:
-                    self._json({"error": "Job not found"}, HTTPStatus.NOT_FOUND)
-                except HermesAPIError as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_GATEWAY)
-                return
-
-            match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})/status", self.path)
-            if match:
-                payload = self._read_json()
-                status = _normalize_cockpit_status(payload.get("status"))
-                if status not in COCKPIT_JOB_STATUSES:
-                    self._json(
-                        {
-                            "error": "Status must be one of: "
-                            + ", ".join(COCKPIT_JOB_STATUSES.keys()),
-                        },
-                        HTTPStatus.BAD_REQUEST,
-                    )
-                    return
-                note = str(payload.get("note") or "Updated from JobApps cockpit.")
-                try:
-                    record = state.repo.record_event(
-                        match.group(1),
-                        "status_changed",
-                        {
-                            "status": status,
-                            "note": note,
-                            "next_action": COCKPIT_JOB_STATUSES[status],
-                            "source": "cockpit",
-                        },
-                    )
-                    self._json({"job": record, "state": state.full_state()})
-                except KeyError:
-                    self._json({"error": "Job not found"}, HTTPStatus.NOT_FOUND)
-                return
-
-            match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})/events", self.path)
-            if match:
-                payload = self._read_json()
-                event_type = str(payload.get("event_type") or "note")
-                saved = state.repo.record_event(match.group(1), event_type, payload)
-                self._json(saved)
-                return
-
-            match = re.fullmatch(r"/api/progress-items/([a-f0-9]{12})/disposition", self.path)
-            if match:
-                payload = self._read_json()
-                status = _normalize_action_item_status(payload.get("status") or payload.get("disposition"))
-                if status not in ACTION_ITEM_STATUSES:
-                    self._json({"error": "Status must be open, pending, done, dismissed, not_needed, or canceled."}, HTTPStatus.BAD_REQUEST)
-                    return
-                try:
-                    item = state.repo.update_progress_item(
-                        match.group(1),
-                        status,
-                        notes=str(payload.get("note") or "") if "note" in payload else None,
-                        due_date=str(payload.get("due_date") or "") if "due_date" in payload else None,
-                    )
-                    self._json({"progress_item": item, "state": state.full_state()})
-                except KeyError:
-                    self._json({"error": "Progress item not found"}, HTTPStatus.NOT_FOUND)
-                return
-
-            match = re.fullmatch(r"/api/followups/([a-f0-9]{12})/disposition", self.path)
-            if match:
-                payload = self._read_json()
-                status = _normalize_action_item_status(payload.get("status") or payload.get("disposition"))
-                if status not in ACTION_ITEM_STATUSES:
-                    self._json({"error": "Status must be open, pending, done, dismissed, not_needed, or canceled."}, HTTPStatus.BAD_REQUEST)
-                    return
-                try:
-                    followup = state.repo.update_followup(
-                        match.group(1),
-                        status,
-                        due_date=str(payload.get("due_date") or "") if "due_date" in payload else None,
-                        reason=str(payload.get("reason") or "") if "reason" in payload else None,
-                    )
-                    self._json({"followup": followup, "state": state.full_state()})
-                except KeyError:
-                    self._json({"error": "Follow-up not found"}, HTTPStatus.NOT_FOUND)
-                return
-
-            match = re.fullmatch(r"/api/approvals/([a-f0-9]{12})/disposition", self.path)
-            if match:
-                payload = self._read_json()
-                action = str(payload.get("action") or payload.get("disposition") or "").strip().lower()
-                if action not in {"approve", "reject"}:
-                    self._json({"error": "Approval action must be approve or reject."}, HTTPStatus.BAD_REQUEST)
-                    return
-                status = "approved" if action == "approve" else "rejected"
-                try:
-                    approval = state.repo.update_approval(
-                        match.group(1),
-                        status,
-                        payload={"note": payload.get("note", ""), "acted_via": "actions"},
-                    )
-                    if approval.get("job_id"):
-                        state.repo.record_event(
-                            approval["job_id"],
-                            "approval_updated",
-                            {"approval_id": match.group(1), "status": status, "note": payload.get("note", "")},
-                        )
-                    self._json({"approval": approval, "state": state.full_state()})
-                except KeyError:
-                    self._json({"error": "Approval not found"}, HTTPStatus.NOT_FOUND)
-                return
-
-            match = re.fullmatch(r"/api/jobs/([a-f0-9]{12})/approvals/([a-f0-9]{12})", self.path)
-            if match:
-                payload = self._read_json()
-                action = str(payload.get("action") or "").strip().lower()
-                if action not in {"approve", "reject"}:
-                    self._json({"error": "Approval action must be approve or reject."}, HTTPStatus.BAD_REQUEST)
-                    return
-                status = "approved" if action == "approve" else "rejected"
-                try:
-                    approval = state.repo.update_approval(
-                        match.group(2),
-                        status,
-                        payload={"note": payload.get("note", ""), "acted_via": "cockpit"},
-                    )
-                    state.repo.record_event(
-                        match.group(1),
-                        "approval_updated",
-                        {"approval_id": match.group(2), "status": status, "note": payload.get("note", "")},
-                    )
-                    self._json({"approval": approval, "state": state.full_state()})
-                except KeyError:
-                    self._json({"error": "Approval not found"}, HTTPStatus.NOT_FOUND)
-                return
-
-            match = re.fullmatch(r"/api/tools/([a-zA-Z0-9_]+)", self.path)
-            if match:
-                payload = self._read_json()
-                try:
-                    result = state.toolbox.execute(match.group(1), payload)
-                    self._json(result)
-                except KeyError:
-                    self._json({"error": "Unknown tool"}, HTTPStatus.NOT_FOUND)
-                except Exception as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
-
-            if self.path == "/api/criteria":
-                payload = self._read_json()
-                try:
-                    save_config_overlay({"criteria": payload})
-                    state.config = load_config()
-                    state.toolbox.config = state.config
-                    state.discovery = DiscoveryService(state.repo, state.config)
-                    state.mark_state_changed(force=True)
-                    self._json({"criteria": state.config.get("criteria", {}), "saved": True})
-                except Exception as exc:
-                    self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-                return
-
-            self.send_error(HTTPStatus.NOT_FOUND, "Not found")
+        def version_string(self) -> str:
+            return self.server_version
 
         def log_message(self, format: str, *args: Any) -> None:
-            print("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format % args))
+            if os.environ.get("JOBAPPS_DEBUG"):
+                super().log_message(format, *args)
 
-        def _read_json(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8")
-            return json.loads(raw or "{}")
+        def do_GET(self) -> None:
+            self._dispatch()
 
-        def _hermes_status(self) -> dict[str, Any]:
-            payload: dict[str, Any] = {
-                "profile": state.hermes_profile,
-                "session_key": state.hermes_session_key,
-                "api_base": state.hermes.base_url,
-                "model": state.hermes.model,
-                "status": "unknown",
-                "features": {},
-                "commands": {"available": state.slash is not None},
-            }
+        do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_GET
+
+        # -- request ---------------------------------------------------------
+
+        def _dispatch(self) -> None:
+            self._started = False
             try:
-                health = state.hermes.health()
-                capabilities = state.hermes.capabilities()
-                payload["status"] = health.get("status", "ok")
-                payload["health"] = health
-                payload["features"] = capabilities.get("features", {})
-                payload["advertised_model"] = capabilities.get("model") or payload["model"]
-            except HermesAPIError as exc:
-                payload["status"] = "offline"
-                payload["error"] = str(exc)
-            return payload
+                self._respond()
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+            except Exception as exc:  # one bad request must never stop the server
+                if os.environ.get("JOBAPPS_DEBUG"):
+                    traceback.print_exc()
+                self.close_connection = True
+                if not self._started:
+                    message = clip(f"{type(exc).__name__}: {exc}", 200)
+                    try:
+                        self._json(500, {"error": f"The cockpit hit an internal error. {message}"})
+                    except OSError:
+                        pass
 
-        def _hermes_commands(self) -> dict[str, Any]:
-            if state.command_catalog_cache is None:
-                catalog = state.slash.catalog()
-                commands_by_name: dict[str, dict[str, str]] = {}
-                categorized: set[str] = set()
-                categories = []
-                for category in catalog.get("categories", []):
-                    if not isinstance(category, dict):
-                        continue
-                    pairs = category.get("pairs", [])
-                    category_commands = []
-                    category_name = str(category.get("name") or "Commands")
-                    for pair in pairs:
-                        if not isinstance(pair, list) or len(pair) < 2:
-                            continue
-                        command = str(pair[0])
-                        description = str(pair[1])
-                        categorized.add(command)
-                        item = {"command": command, "description": description, "category": category_name}
-                        commands_by_name.setdefault(command, item)
-                        category_commands.append(item)
-                    if category_commands:
-                        categories.append({"name": category_name, "commands": category_commands})
+        def _respond(self) -> None:
+            method = self.command
+            length = self._content_length()
+            parts = urlsplit(self.path)
+            path = unquote(parts.path)
+            query = dict(parse_qsl(parts.query, keep_blank_values=True))
 
-                uncategorized_commands = []
-                for pair in catalog.get("pairs", []):
-                    if not isinstance(pair, list) or len(pair) < 2:
-                        continue
-                    command = str(pair[0])
-                    description = str(pair[1])
-                    if command in commands_by_name:
-                        continue
-                    category_name = "Skills" if command not in categorized else "Commands"
-                    item = {"command": command, "description": description, "category": category_name}
-                    commands_by_name[command] = item
-                    uncategorized_commands.append(item)
-                if uncategorized_commands:
-                    categories.append({"name": "Skills", "commands": uncategorized_commands})
+            if not _LOCAL_HOST.fullmatch(self.headers.get("Host", "").strip()):
+                return self._reject(403, "This cockpit only answers requests addressed to this computer.", length)
+            if method == "POST":
+                return self._post(path, query, length)
+            if method not in ("GET", "HEAD"):
+                return self._reject(405, "Use GET or POST.", length)
+            if length is None:
+                self.close_connection = True
+            elif length:
+                self._drain(length)
+            if path in ("/", "/index.html"):
+                return self._static("index.html")
+            if path.startswith("/static/"):
+                return self._static(path[len("/static/") :])
+            if path.startswith("/api/"):
+                return self._api("GET", path[len("/api") :], query, None)
+            return self._json(404, {"error": f"Not found: {clip(path, 120)}"})
 
-                state.command_catalog_cache = {
-                    "commands": list(commands_by_name.values()),
-                    "categories": categories,
-                    "canon": catalog.get("canon", {}),
-                    "subcommands": catalog.get("sub", {}),
-                    "skill_count": catalog.get("skill_count", 0),
-                    "warning": catalog.get("warning", ""),
-                }
-            return state.command_catalog_cache
-
-        def _json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
-            data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-            gzip_response = "gzip" in self.headers.get("Accept-Encoding", "").lower() and len(data) > 1024
-            if gzip_response:
-                data = gzip.compress(data, compresslevel=6)
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            if gzip_response:
-                self.send_header("Content-Encoding", "gzip")
-                self.send_header("Vary", "Accept-Encoding")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def _start_sse(self) -> None:
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("X-Accel-Buffering", "no")
-            self.end_headers()
-
-        def _sse(self, event_name: str, payload: dict[str, Any]) -> None:
-            safe_name = re.sub(r"[^a-zA-Z0-9_.-]", ".", event_name) or "message"
-            data = json.dumps(payload, separators=(",", ":"))
-            self.wfile.write(f"event: {safe_name}\ndata: {data}\n\n".encode("utf-8"))
-            self.wfile.flush()
-
-        def _empty_json(self) -> None:
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-
-        def _materials_root(self) -> Path:
-            return resolve_project_path(state.config.get("materials_path", "data/materials")).expanduser()
-
-        def _material_file_path(self, material: dict[str, Any], target: str) -> Path:
-            metadata = material.get("metadata") if isinstance(material.get("metadata"), dict) else {}
-            compile_info = metadata.get("compile") if isinstance(metadata.get("compile"), dict) else {}
-            content_metadata = _material_payload_metadata(material.get("content"))
-            if target == "pdf":
-                candidates = [compile_info.get("pdf_path"), metadata.get("pdf_path"), content_metadata.get("pdf_path")]
-                source_path = Path(str(material.get("file_path") or "")).expanduser()
-                if source_path.suffix.lower() == ".pdf":
-                    candidates.append(str(source_path))
-                if source_path.suffix.lower() in {".tex", ".ltx", ".typ", ".typst"}:
-                    candidates.append(str(source_path.with_suffix(".pdf")))
-                for candidate in candidates:
-                    if not candidate:
-                        continue
-                    path = Path(str(candidate)).expanduser()
-                    if path.exists() and path.is_file():
-                        return path
-                file_path = candidates[0] if candidates else ""
-            elif target == "log":
-                file_path = compile_info.get("log_path")
-            else:
-                file_path = material.get("file_path")
-            if not file_path:
-                raise ValueError(f"No {target or 'source'} file is available for this material.")
-            return Path(str(file_path)).expanduser()
-
-        def _serve_local_artifact(self, path: Path, *, root: Path, head: bool = False) -> None:
-            content_type = mimetypes.guess_type(path.name)[0] or "text/plain"
-            if path.suffix.lower() in {".tex", ".ltx", ".typ", ".typst", ".md", ".txt", ".log"}:
-                content_type = "text/plain; charset=utf-8"
-            self._serve_file(path, content_type, root=root, head=head, inline_name=path.name)
-
-        def _serve_file(
-            self,
-            path: Path,
-            content_type: str | None = None,
-            *,
-            root: Path = WEB_ROOT,
-            head: bool = False,
-            inline_name: str | None = None,
-        ) -> None:
+        def _post(self, path: str, query: dict[str, str], length: int | None) -> None:
+            origin = self.headers.get("Origin")
+            if origin is not None and not _LOCAL_ORIGIN.fullmatch(origin.strip()):
+                return self._reject(403, "Requests from other sites are not accepted.", length)
+            if not path.startswith("/api/"):
+                return self._reject(404, f"Not found: {clip(path, 120)}", length)
+            content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if content_type != "application/json":
+                return self._reject(415, "Send the request body as application/json.", length)
+            if length is None:
+                return self._reject(400, "The request needs a valid Content-Length.", 0, close=True)
+            if length > MAX_BODY_BYTES:
+                return self._reject(413, "The request body is larger than 2 MiB.", length)
+            raw = self.rfile.read(length)
             try:
-                resolved = path.resolve()
-                resolved.relative_to(root.resolve())
+                body = json.loads(raw.decode("utf-8"))
             except ValueError:
-                self.send_error(HTTPStatus.FORBIDDEN, "Forbidden")
-                return
-            if not resolved.exists() or not resolved.is_file():
-                self.send_error(HTTPStatus.NOT_FOUND, "Not found")
-                return
-            data = resolved.read_bytes()
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", content_type or mimetypes.guess_type(resolved.name)[0] or "text/plain")
-            self.send_header("Content-Length", str(len(data)))
-            if inline_name:
-                safe_name = re.sub(r'["\r\n]', "_", inline_name)
-                self.send_header("Content-Disposition", f'inline; filename="{safe_name}"')
+                return self._json(400, {"error": "The request body is not valid JSON."})
+            if not isinstance(body, dict):
+                return self._json(400, {"error": "The request body must be a JSON object."})
+            self._api("POST", path[len("/api") :], query, body)
+
+        def _content_length(self) -> int | None:
+            if self.headers.get("Transfer-Encoding"):
+                return None
+            raw = self.headers.get("Content-Length")
+            if raw is None:
+                return 0
+            return int(raw) if raw.strip().isdigit() else None
+
+        def _drain(self, length: int) -> None:
+            """Read and discard a request body so the reply is not lost to a reset."""
+            remaining = min(length, DRAIN_LIMIT_BYTES)
+            while remaining > 0:
+                chunk = self.rfile.read(min(65536, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+            if length > DRAIN_LIMIT_BYTES:
+                self.close_connection = True
+
+        def _reject(self, status: int, message: str, length: int | None, *, close: bool = False) -> None:
+            if length is None or close:
+                self.close_connection = True
+            elif length:
+                self._drain(length)
+            self._json(status, {"error": message})
+
+        # -- responses -------------------------------------------------------
+
+        def _api(self, method: str, route: str, query: dict[str, str], body: dict[str, Any] | None) -> None:
+            if method == "POST":
+                with write_lock:
+                    status, payload = api.handle(ws, method, route, query, body)
+            else:
+                status, payload = api.handle(ws, method, route, query, body)
+            if isinstance(payload, api.FileResult):
+                return self._file(payload.path)
+            self._json(status, payload)
+
+        def _send(self, status: int, body: bytes, headers: list[tuple[str, str]]) -> None:
+            self._started = True
+            self.send_response(status)
+            for name, value in headers:
+                self.send_header(name, value)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            if not head:
-                self.wfile.write(data)
+            if self.command != "HEAD":
+                self.wfile.write(body)
 
-    return Handler
+        def _compressed(self, body: bytes, headers: list[tuple[str, str]]) -> bytes:
+            headers.append(("Vary", "Accept-Encoding"))
+            if len(body) > GZIP_MIN_BYTES and _accepts_gzip(self.headers.get("Accept-Encoding", "")):
+                headers.append(("Content-Encoding", "gzip"))
+                return gzip.compress(body, compresslevel=6, mtime=0)
+            return body
+
+        def _json(self, status: int, payload: Any) -> None:
+            headers = [("Content-Type", "application/json; charset=utf-8"), ("Cache-Control", "no-store")]
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+            self._send(status, self._compressed(body, headers), headers)
+
+        def _static(self, name: str) -> None:
+            root = DIST.resolve()
+            try:
+                target = (root / name).resolve()
+                target.relative_to(root)
+            except (OSError, ValueError):
+                target = None
+            content_type = STATIC_TYPES.get(target.suffix.lower()) if target else None
+            if (
+                target is None
+                or content_type is None
+                or not target.is_file()
+                or any(part.startswith(".") for part in target.relative_to(root).parts)
+            ):
+                return self._json(404, {"error": f"Not found: {clip(name, 120)}"})
+            cache = "public, max-age=31536000, immutable" if target.suffix.lower() in _LONG_CACHED else "no-cache"
+            headers = [("Content-Type", content_type), ("Cache-Control", cache)]
+            body = target.read_bytes()
+            if target.suffix.lower() in _COMPRESSIBLE:
+                body = self._compressed(body, headers)
+            self._send(200, body, headers)
+
+        def _file(self, path: Path) -> None:
+            with path.open("rb") as stream:
+                remaining = os.fstat(stream.fileno()).st_size
+                self._started = True
+                self.close_connection = True
+                self.send_response(200)
+                self.send_header("Content-Type", file_content_type(path))
+                self.send_header("Content-Length", str(remaining))
+                self.send_header("Content-Disposition", f"inline; filename*=UTF-8''{quote(path.name, safe='')}")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Referrer-Policy", "no-referrer")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                while remaining > 0 and self.command != "HEAD":
+                    chunk = stream.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+
+    return CockpitHandler
 
 
-def _normalize_cockpit_status(value: Any) -> str:
-    normalized = str(value or "").strip().lower().replace("-", "_")
-    return COCKPIT_STATUS_ALIASES.get(normalized, normalized)
-
-
-def _material_payload_metadata(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return value
-    if not isinstance(value, str):
-        return {}
-    text = value.strip()
-    if not text or text[0] not in "{[":
-        return {}
+def serve(ws: Workspace, *, port: int = 8765, open_browser: bool = True) -> None:
     try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _normalize_action_item_status(value: Any) -> str:
-    normalized = str(value or "").strip().lower().replace("-", "_")
-    return ACTION_STATUS_ALIASES.get(normalized, normalized)
-
-
-def _pending_hermes_job_ids(jobs: list[dict[str, Any]]) -> list[str]:
-    blocked_statuses = {"applied", "waiting", "closed", "rejected", "declined", "archived", "hermes_completed", "skip", "skipped", "not_interested", "not_needed"}
-    output: list[str] = []
-    for job in jobs:
-        job_id = str(job.get("id") or "")
-        if not re.fullmatch(r"[a-f0-9]{12}", job_id):
-            continue
-        decision = str(job.get("decision") or job.get("evaluation", {}).get("decision") or "pending").lower()
-        status = str(job.get("status") or "").lower()
-        active_run = job.get("active_run") or {}
-        if decision == "skip" or status in blocked_statuses:
-            continue
-        if active_run.get("status") in ACTIVE_STATUSES:
-            continue
-        output.append(job_id)
-    return output
-
-
-def _read_limit(value: Any, *, default: int, maximum: int) -> int:
+        server = ThreadingHTTPServer(("127.0.0.1", port), create_handler(ws))
+    except OSError as exc:
+        raise ValueError(
+            f"Could not start the cockpit on port {port}: {exc.strerror or exc}. Pick another port with --port."
+        ) from exc
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    print(f"JobApps cockpit: {url}", flush=True)
+    print(f"Workspace: {ws.root}  (Ctrl-C to stop)", flush=True)
+    if open_browser:
+        threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
     try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return default
-    return max(1, min(parsed, maximum))
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        server.server_close()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the Hermes JobApps local cockpit.")
-    parser.add_argument("--host", default="127.0.0.1")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m hermes_jobapps.server", description="Local JobApps cockpit.")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--config", default=None)
-    parser.add_argument("--db", default=None)
-    args = parser.parse_args()
-
-    state = AppState(args.config, args.db)
-    server = ThreadingHTTPServer((args.host, args.port), create_handler(state))
-    print(f"Hermes JobApps running at http://{args.host}:{args.port}")
-    print(f"App database: {state.repo.path}")
-    print(f"Hermes API: {state.hermes.base_url}")
-    print(f"Hermes profile: {state.hermes_profile}")
-    server.serve_forever()
+    parser.add_argument("--workspace", help="Workspace folder. Default: JOBAPPS_HOME or ~/JobApps.")
+    parser.add_argument("--no-open", action="store_true", help="Do not open a browser window.")
+    args = parser.parse_args(argv)
+    try:
+        serve(Workspace(args.workspace) if args.workspace else Workspace(), port=args.port, open_browser=not args.no_open)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

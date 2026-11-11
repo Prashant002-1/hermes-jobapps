@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from hermes_jobapps.config import load_config
+import hermes_jobapps
+from hermes_jobapps.build import _pdf_integrity_errors, compile_typst_to_pdf
 from hermes_jobapps.resume_qa import (
     TYPST_QA_PRELUDE,
     analyze_bbox_layout,
@@ -15,38 +17,165 @@ from hermes_jobapps.resume_qa import (
     query_typst_telemetry,
     verify_resume_pdf,
 )
-from hermes_jobapps.typst import _pdf_integrity_errors, build_full_resume_typst, compile_typst_to_pdf
+
+
+RESUME_FIXTURE = (
+    '#import "@preview/simple-technical-resume:0.1.1": *\n\n'
+    + TYPST_QA_PRELUDE
+    + """
+#show: resume.with(
+  paper: "us-letter",
+  top-margin: 0.32in,
+  bottom-margin: 0.18in,
+  left-margin: 0.42in,
+  right-margin: 0.42in,
+  font: "Libertinus Serif",
+  font-size: 10pt,
+  personal-info-font-size: 9.3pt,
+  author-position: center,
+  personal-info-position: center,
+  author-name: "Jordan Example",
+  email: "jordan@example.com",
+)
+
+#qa-region("section", "unusual-field-work-1")[
+#custom-title("Unusual Field Work")[
+  - #qa-region("bullet", "unusual-field-work-1-bullet-1")[First result]
+  - #qa-region("bullet", "unusual-field-work-1-bullet-2")[Second result]
+]
+#v(0.40em)
+]
+#qa-region("section", "selected-research-2")[
+#custom-title("Selected Research")[
+  - #qa-region("bullet", "selected-research-2-bullet-1")[Research result]
+]
+#v(0.40em)
+]
+"""
+)
+
+ONE_LINE_BBOX = """<html xmlns="http://www.w3.org/1999/xhtml"><body><doc><page width="612" height="792"><flow><block>
+<line xMin="24" yMin="10" xMax="300" yMax="24"><word xMin="24" yMin="10" xMax="100" yMax="24">Resume</word></line>
+</block></flow></page></doc></body></html>"""
+
+
+def default_settings() -> dict:
+    path = Path(hermes_jobapps.__file__).parent / "resources" / "defaults.json"
+    return json.loads(path.read_text())
+
+
+def write_fake_pdftotext(root: Path, bbox: str) -> None:
+    pdftotext = root / "pdftotext"
+    pdftotext.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        f"print({bbox!r} if '-bbox-layout' in sys.argv else 'Resume words')\n",
+        encoding="utf-8",
+    )
+    pdftotext.chmod(0o755)
+
+
+def write_fake_toolchain(root: Path, bbox: str) -> dict:
+    typst = root / "typst"
+    typst.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "if sys.argv[1] == 'compile':\n"
+        "    pathlib.Path(sys.argv[-1]).write_bytes(b'%PDF-1.4 fake')\n"
+        "else:\n"
+        "    print('[]')\n",
+        encoding="utf-8",
+    )
+    typst.chmod(0o755)
+    pdfinfo = root / "pdfinfo"
+    pdfinfo.write_text("#!/bin/sh\nprintf 'Pages:           1\\n'\n", encoding="utf-8")
+    pdfinfo.chmod(0o755)
+    write_fake_pdftotext(root, bbox)
+    return {
+        "typst": {"compiler_order": ["typst"], "compiler_paths": [str(root)], "timeout_seconds": 5},
+        "latex": {"compiler_paths": [str(root)], "timeout_seconds": 5},
+        "resume_qa": {"tool_paths": [str(root)], "required": True, "timeout_seconds": 5},
+    }
+
+
+def package_unavailable(stderr: str) -> bool:
+    return "@preview" in stderr or "package" in stderr.lower()
 
 
 class ResumeGeometryTests(unittest.TestCase):
     def test_default_config_enforces_deterministic_resume_qa(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config = load_config(Path(tmpdir) / "missing-local.json")
+        config = default_settings()
 
         self.assertTrue(config["resume_qa"]["required"])
         self.assertEqual(config["resume_qa"]["required_pages"], 1)
-        self.assertEqual(config["resume_qa"]["required_body_font"], "Avenir Next")
+        self.assertEqual(config["resume_qa"]["required_body_font"], "")
         self.assertEqual(config["resume_qa"]["minimum_body_font_size_pt"], 10)
         self.assertEqual(config["resume_qa"]["max_repair_iterations"], 3)
         self.assertEqual(config["resume_qa"]["page_width_pt"], 612)
         self.assertEqual(config["resume_qa"]["page_height_pt"], 792)
 
-    def test_generated_resume_instruments_sections_and_bullets_without_fixed_section_schema(self) -> None:
-        source = build_full_resume_typst(
-            sections=[
-                {"title": "Unusual Field Work", "items": ["First result", "Second result"]},
-                {"title": "Selected Research", "items": ["Research result"]},
-            ]
-        )
+    @unittest.skipUnless(shutil.which("typst"), "Typst is not installed")
+    def test_instrumented_resume_reports_sections_and_bullets_without_fixed_section_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "resume.typ"
+            source.write_text(RESUME_FIXTURE, encoding="utf-8")
 
-        self.assertIn(TYPST_QA_PRELUDE.strip(), source)
-        self.assertIn('#qa-region("section", "unusual-field-work-1")', source)
-        self.assertIn('#qa-region("bullet", "unusual-field-work-1-bullet-1")', source)
-        self.assertIn('#qa-region("bullet", "unusual-field-work-1-bullet-2")', source)
-        self.assertIn('#qa-region("section", "selected-research-2")', source)
-        self.assertIn('font: "Avenir Next"', source)
-        self.assertIn("font-size: 10pt", source)
-        self.assertIn("#v(0.40em)", source)
+            result = query_typst_telemetry(source, compiler=shutil.which("typst") or "typst", timeout=30)
+
+        if result["status"] == "query_failed" and package_unavailable(result.get("stderr", "")):
+            self.skipTest("The Typst resume package is not available offline")
+        self.assertEqual(result["status"], "collected", result)
+        regions = {(region["kind"], region["id"]) for region in result["regions"]}
+        self.assertEqual(
+            regions,
+            {
+                ("section", "unusual-field-work-1"),
+                ("bullet", "unusual-field-work-1-bullet-1"),
+                ("bullet", "unusual-field-work-1-bullet-2"),
+                ("section", "selected-research-2"),
+                ("bullet", "selected-research-2-bullet-1"),
+            },
+        )
+        self.assertTrue(all(region["page"] == 1 and region["height_pt"] > 0 for region in result["regions"]))
+
+    def _source_violations(self, source_text: str, resume_qa: dict) -> list[dict]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            pdf = root / "resume.pdf"
+            pdf.write_bytes(b"%PDF-1.4 fake")
+            source = root / "resume.typ"
+            source.write_text(source_text, encoding="utf-8")
+            write_fake_pdftotext(root, ONE_LINE_BBOX)
+
+            report = verify_resume_pdf(
+                pdf,
+                config={"resume_qa": {"tool_paths": [str(root)], "timeout_seconds": 5, **resume_qa}},
+                source_path=source,
+            )
+
+        self.assertIn(report["status"], {"passed", "failed"}, report)
+        return report["violations"]
+
+    def test_required_body_font_is_enforced_when_configured(self) -> None:
+        mismatched = self._source_violations(RESUME_FIXTURE, {"required_body_font": "Atkinson Hyperlegible"})
+        matching = self._source_violations(RESUME_FIXTURE, {"required_body_font": "Libertinus Serif"})
+
+        mismatch = next(item for item in mismatched if item["type"] == "body_font_mismatch")
+        self.assertEqual(mismatch["actual_font"], "Libertinus Serif")
+        self.assertEqual(mismatch["required_font"], "Atkinson Hyperlegible")
+        self.assertEqual(mismatch["repair_scope"], "shared_typography")
+        self.assertEqual(matching, [])
+
+    def test_empty_required_body_font_skips_font_check_but_keeps_minimum_size(self) -> None:
+        small = RESUME_FIXTURE.replace("  font-size: 10pt,", "  font-size: 9pt,")
+        self.assertNotEqual(small, RESUME_FIXTURE)
+
+        for resume_qa in ({"required_body_font": ""}, {}, default_settings()["resume_qa"]):
+            with self.subTest(resume_qa=sorted(resume_qa)):
+                settings = {key: value for key, value in resume_qa.items() if key != "bottom_whitespace_target_in"}
+                self.assertEqual(self._source_violations(RESUME_FIXTURE, settings), [])
+                types = [item["type"] for item in self._source_violations(small, settings)]
+                self.assertEqual(types, ["body_font_below_minimum"])
 
     def test_reports_inter_item_overlap_relative_to_normal_wrapped_lines(self) -> None:
         bbox = """<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><body><doc>
@@ -204,7 +333,7 @@ class ResumeGeometryTests(unittest.TestCase):
     def test_reports_bottom_whitespace_above_target_band(self) -> None:
         bbox = """<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><body><doc>
         <page width="612" height="792"><flow><block>
-          <line xMin="24" yMin="716" xMax="300" yMax="730"><word xMin="24" yMin="716" xMax="100" yMax="730">Datadog</word></line>
+          <line xMin="24" yMin="716" xMax="300" yMax="730"><word xMin="24" yMin="716" xMax="100" yMax="730">Northstar</word></line>
         </block></flow></page></doc></body></html>"""
 
         report = analyze_bbox_layout(
@@ -221,7 +350,7 @@ class ResumeGeometryTests(unittest.TestCase):
     def test_reports_bottom_whitespace_below_target_band(self) -> None:
         bbox = """<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><body><doc>
         <page width="612" height="792"><flow><block>
-          <line xMin="24" yMin="746" xMax="300" yMax="760"><word xMin="24" yMin="746" xMax="100" yMax="760">Datadog</word></line>
+          <line xMin="24" yMin="746" xMax="300" yMax="760"><word xMin="24" yMin="746" xMax="100" yMax="760">Northstar</word></line>
         </block></flow></page></doc></body></html>"""
 
         report = analyze_bbox_layout(
@@ -238,7 +367,7 @@ class ResumeGeometryTests(unittest.TestCase):
     def test_accepts_bottom_whitespace_inside_target_band(self) -> None:
         bbox = """<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml"><body><doc>
         <page width="612" height="792"><flow><block>
-          <line xMin="24" yMin="731.2" xMax="300" yMax="745.2"><word xMin="24" yMin="731.2" xMax="100" yMax="745.2">Datadog</word></line>
+          <line xMin="24" yMin="731.2" xMax="300" yMax="745.2"><word xMin="24" yMin="731.2" xMax="100" yMax="745.2">Northstar</word></line>
         </block></flow></page></doc></body></html>"""
 
         report = analyze_bbox_layout(
@@ -373,7 +502,7 @@ class ResumeGeometryTests(unittest.TestCase):
             typst = root / "typst"
             typst.write_text(
                 "#!/usr/bin/env python3\n"
-                "print('[{\"value\":{\"jobapps_qa\":true,\"kind\":\"experience\",\"id\":\"experience-1\",\"width\":\"560pt\",\"height\":\"60pt\"},\"position\":{\"page\":1,\"x\":\"24pt\",\"y\":\"0pt\"}}]')\n",
+                "print('[{\"value\":{\"jobapps_qa\":true,\"kind\":\"experience\",\"id\":\"northstar\",\"width\":\"560pt\",\"height\":\"60pt\"},\"position\":{\"page\":1,\"x\":\"24pt\",\"y\":\"0pt\"}}]')\n",
                 encoding="utf-8",
             )
             typst.chmod(0o755)
@@ -394,7 +523,7 @@ class ResumeGeometryTests(unittest.TestCase):
         self.assertEqual(Path(report["tool"]).name, "pdftotext")
         overlap = next(item for item in report["violations"] if item["type"] == "bullet_item_overlap")
         self.assertEqual(report["telemetry"]["status"], "collected")
-        self.assertEqual(overlap["semantic_id"], "experience-1")
+        self.assertEqual(overlap["semantic_id"], "northstar")
         self.assertEqual(overlap["semantic_kind"], "experience")
         self.assertEqual(overlap["source_range"]["line_start"], 2)
         self.assertEqual(report["artifact"]["source_sha256"], expected_source_hash)
@@ -531,33 +660,7 @@ class ResumeGeometryTests(unittest.TestCase):
             root = Path(tmpdir)
             source = root / "resume.typ"
             source.write_text("Hello", encoding="utf-8")
-            typst = root / "typst"
-            typst.write_text(
-                "#!/usr/bin/env python3\n"
-                "import pathlib, sys\n"
-                "if sys.argv[1] == 'compile':\n"
-                "    pathlib.Path(sys.argv[-1]).write_bytes(b'%PDF-1.4 fake')\n"
-                "else:\n"
-                "    print('[]')\n",
-                encoding="utf-8",
-            )
-            typst.chmod(0o755)
-            pdfinfo = root / "pdfinfo"
-            pdfinfo.write_text("#!/bin/sh\nprintf 'Pages:           1\\n'\n", encoding="utf-8")
-            pdfinfo.chmod(0o755)
-            pdftotext = root / "pdftotext"
-            pdftotext.write_text(
-                "#!/usr/bin/env python3\n"
-                "import sys\n"
-                f"print({bbox!r} if '-bbox-layout' in sys.argv else 'Resume words')\n",
-                encoding="utf-8",
-            )
-            pdftotext.chmod(0o755)
-            config = {
-                "typst": {"compiler_order": ["typst"], "compiler_paths": [str(root)], "timeout_seconds": 5},
-                "latex": {"compiler_paths": [str(root)], "timeout_seconds": 5},
-                "resume_qa": {"tool_paths": [str(root)], "required": True, "timeout_seconds": 5},
-            }
+            config = write_fake_toolchain(root, bbox)
 
             result = compile_typst_to_pdf(source, config=config)
 
@@ -567,6 +670,64 @@ class ResumeGeometryTests(unittest.TestCase):
         self.assertEqual(result["verification"]["layout"]["status"], "failed")
         self.assertTrue(Path(result["pdf_path"]).name.endswith(".pdf"))
         self.assertIn("repair_plan", result["verification"]["layout"])
+
+    def test_typst_compile_without_layout_qa_verifies_pdf_and_skips_layout_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            source = root / "cover-letter.typ"
+            source.write_text("Hello", encoding="utf-8")
+            config = write_fake_toolchain(root, "<not-valid-bbox")
+
+            result = compile_typst_to_pdf(source, config=config, layout_qa=False)
+            pdf_exists = Path(result["pdf_path"]).is_file()
+            build_dir_exists = (root / "build").exists()
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["status"], "compiled")
+        self.assertTrue(result["rendered"])
+        self.assertTrue(pdf_exists)
+        self.assertFalse(build_dir_exists)
+        self.assertNotIn("layout", result["verification"])
+        self.assertEqual(result["verification"]["pages"], 1)
+        self.assertEqual(result["verification"]["word_count"], 2)
+        self.assertEqual(result["verification"]["integrity_errors"], [])
+
+    @unittest.skipUnless(shutil.which("typst") and shutil.which("pdftotext"), "Typst or Poppler is not installed")
+    def test_real_typst_compile_runs_layout_qa_on_instrumented_resume(self) -> None:
+        config = default_settings()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            source = Path(tmpdir) / "resume.typ"
+            source.write_text(RESUME_FIXTURE, encoding="utf-8")
+
+            result = compile_typst_to_pdf(source, config=config)
+            if not result.get("rendered") and package_unavailable(result.get("stderr", "")):
+                self.skipTest("The Typst resume package is not available offline")
+            strict = dict(config, resume_qa={**config["resume_qa"], "required_body_font": "Atkinson Hyperlegible"})
+            strict_result = compile_typst_to_pdf(source, config=strict)
+            letter_result = compile_typst_to_pdf(source, config=config, layout_qa=False)
+            pdf_exists = Path(result["pdf_path"]).is_file()
+
+        self.assertTrue(result["rendered"], result)
+        self.assertTrue(pdf_exists)
+        verification = result["verification"]
+        self.assertEqual(verification["pages"], 1)
+        self.assertEqual(verification["integrity_errors"], [])
+        layout = verification["layout"]
+        self.assertEqual(layout["telemetry"]["status"], "collected")
+        self.assertIn("unusual-field-work-1", {region["id"] for region in layout["telemetry"]["regions"]})
+        types = {item["type"] for item in layout["violations"]}
+        self.assertNotIn("body_font_mismatch", types)
+        self.assertNotIn("body_font_below_minimum", types)
+        self.assertEqual(result["ok"], layout["ready"])
+        self.assertEqual(result["status"], "compiled" if layout["ready"] else "verification_failed")
+
+        strict_types = {item["type"] for item in strict_result["verification"]["layout"]["violations"]}
+        self.assertIn("body_font_mismatch", strict_types)
+        self.assertFalse(strict_result["ok"])
+
+        self.assertTrue(letter_result["ok"], letter_result)
+        self.assertEqual(letter_result["status"], "compiled")
+        self.assertNotIn("layout", letter_result["verification"])
 
 
 if __name__ == "__main__":

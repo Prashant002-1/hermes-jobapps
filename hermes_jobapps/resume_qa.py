@@ -954,13 +954,13 @@ def _source_typography_violations(source_path: Path, settings: dict[str, Any]) -
     if "resume.with(" not in source:
         return []
     violations: list[dict[str, Any]] = []
-    required_font = str(settings.get("required_body_font") or "Avenir Next")
+    required_font = str(settings.get("required_body_font") or "")
     minimum_size = float(settings.get("minimum_body_font_size_pt", 10.0))
     font_match = re.search(r'(?m)^\s*font:\s*"([^"]+)"\s*,', source)
     size_match = re.search(r"(?m)^\s*font-size:\s*([0-9]+(?:\.[0-9]+)?)pt\s*,", source)
     actual_font = font_match.group(1) if font_match else ""
     actual_size = float(size_match.group(1)) if size_match else None
-    if actual_font != required_font:
+    if required_font and actual_font != required_font:
         violations.append(
             {
                 "type": "body_font_mismatch",

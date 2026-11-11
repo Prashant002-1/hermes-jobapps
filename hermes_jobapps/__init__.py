@@ -1,16 +1,3 @@
-"""Hermes JobApps local workflow package."""
+"""JobApps: a plain-file job-search workspace with a thin agent plugin."""
 
-__all__ = [
-    "agent",
-    "config",
-    "evaluator",
-    "hermes_client",
-    "knowledge",
-    "latex",
-    "prompts",
-    "repository",
-    "server",
-    "tools",
-    "workflow",
-    "writers",
-]
+__version__ = "1.0.0"

@@ -1,0 +1,88 @@
+{
+  "followups": {
+    "application_check_after_days": 10,
+    "application_stale_after_days": 45,
+    "networking_after_days": 5,
+    "lead_fresh_days": 30
+  },
+  "rules": {
+    "needs_sponsorship": null,
+    "pasted_job_intent": "apply"
+  },
+  "criteria": {
+    "blockers": []
+  },
+  "writing": {
+    "cover_letter_words": [250, 420],
+    "single_hyphen_ranges": false,
+    "file_name_pattern": "{name} - {kind} - {company} - {title}"
+  },
+  "brief": {
+    "max_chars": 60000
+  },
+  "typst": {
+    "compiler_order": ["typst"],
+    "compiler_paths": ["/opt/homebrew/bin", "/usr/local/bin"],
+    "timeout_seconds": 60
+  },
+  "latex": {
+    "compiler_order": ["tectonic", "latexmk", "xelatex", "pdflatex"],
+    "compiler_paths": ["/opt/homebrew/bin", "/usr/local/bin", "/Library/TeX/texbin"],
+    "timeout_seconds": 60
+  },
+  "resume_qa": {
+    "required": true,
+    "required_pages": 1,
+    "required_body_font": "",
+    "minimum_body_font_size_pt": 10,
+    "page_width_pt": 612,
+    "page_height_pt": 792,
+    "page_size_tolerance_pt": 2,
+    "bounds_tolerance_pt": 0.5,
+    "minimum_collision_pt": 2,
+    "collision_relative_factor": 2,
+    "minimum_collision_height_ratio": 0.2,
+    "minimum_text_gap_pt": 1,
+    "maximum_intra_item_leading_factor": 1.35,
+    "minimum_intra_item_leading_delta_pt": 2,
+    "maximum_inter_item_gap_factor": 1.8,
+    "minimum_inter_item_gap_delta_pt": 2,
+    "short_final_line_max_words": 2,
+    "short_final_line_max_width_ratio": 0.25,
+    "bottom_whitespace_target_in": 0.65,
+    "bottom_whitespace_tolerance_in": 0.25,
+    "maximum_internal_to_section_gap_ratio": 0.8,
+    "semantic_heading_tolerance_pt": 4,
+    "right_margin_pt": 24,
+    "max_repair_iterations": 3,
+    "timeout_seconds": 30
+  },
+  "discovery": {
+    "enabled": true,
+    "hydrators": ["greenhouse", "lever", "ashby"],
+    "exa": {
+      "api_key_env": "EXA_API_KEY",
+      "base_url": "https://api.exa.ai",
+      "type": "auto",
+      "default_num_results": 8,
+      "include_domains": [
+        "boards.greenhouse.io",
+        "job-boards.greenhouse.io",
+        "jobs.lever.co",
+        "jobs.ashbyhq.com"
+      ]
+    }
+  },
+  "networking": {
+    "enabled": true,
+    "exa": {
+      "api_key_env": "EXA_API_KEY",
+      "base_url": "https://api.exa.ai",
+      "type": "auto",
+      "category": "people",
+      "default_num_results": 6
+    },
+    "gog_path": "gog",
+    "gog_timeout_seconds": 30
+  }
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>JobApps</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 28 28'><rect x='1' y='6' width='3' height='16' rx='1.5' fill='%23c45a00'/><rect x='7' y='9' width='3' height='13' rx='1.5' fill='%23b72301'/><rect x='13' y='3' width='3' height='22' rx='1.5' fill='%23b72301'/><rect x='19' y='7' width='3' height='15' rx='1.5' fill='%23c45a00'/><rect x='25' y='10' width='3' height='13' rx='1.5' fill='%23b72301'/></svg>">
+<link rel="preload" href="/static/fonts/hanken-grotesk-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  html, body { margin: 0; min-height: 100%; }
+  body { background: #fcf9f8; }
+  @media (prefers-color-scheme: dark) { body { background: #181514; } }
+</style>
+</head>
+<body>
+<div id="jobapps-root"></div>
+<noscript>JobApps needs JavaScript to show the cockpit.</noscript>
+<script src="/static/index.js"></script>
+<script>
+  JobAppsCockpit.mount(document.getElementById("jobapps-root"), {
+    api: JobAppsCockpit.createApiClient({ base: "/api" })
+  });
+</script>
+</body>
+</html>

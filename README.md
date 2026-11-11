@@ -1,237 +1,111 @@
-# Hermes JobApps
+# JobApps
 
-Hermes JobApps is a local job-application cockpit. Paste a job, run blocker preflight, prepare database state, build Typst resume materials and TeX cover-letter materials, chat with Hermes, and record the next action.
+A job-search workspace for the [Hermes](https://github.com/NousResearch/hermes-agent) agent.
 
-The app owns structured state. Hermes performs transitions. A pasted JD means apply intent unless the role has a hard blocker: sponsorship/work authorization, impossible seniority, impossible location, or unreasonable application effort.
+Your whole search lives in one folder of plain files: who you are, what you have done, every job you are pursuing with its resume and letter, the people you are talking to. Hermes reads and writes those files, tailors documents from your real evidence, checks them, and keeps track of what is due.
 
-## Run Locally
+There is no database and no hidden memory. You can open, edit and back up everything yourself.
 
-This version uses only the Python standard library for the cockpit.
+## What it does
 
-Requirements: Python 3.11 or newer. A fresh clone does not need a database,
-profile import, API key, or package install to start; JobApps creates an empty
-ignored SQLite database on first run.
+- **Tracks the pipeline.** `/jobapps` shows what is due, which applications have gone quiet, what is ready to send, and who to reach.
+- **Takes in postings.** Paste a link or a description. JobApps saves it, checks it against your hard blockers and lists the requirements.
+- **Writes from your evidence.** One call hands the agent the posting, your profile, your voice, your rules and your evidence files. Bundled skills cover strategy, resumes, cover letters, application answers, outreach, interview prep and offers.
+- **Plans before it writes.** A short strategy per job (the thesis, the proof, the gap, the way in) keeps the resume, letter, answers and outreach arguing the same case.
+- **Checks the result.** Each document is built to PDF, measured for layout and linted for weak bullets, leaked notes, unsupported numbers and posting coverage.
+- **Catches the fatal slips.** Another employer's name left in a letter, contact details that differ from your profile, a PDF a parser cannot read, the relevant experience buried at the bottom.
+- **Nudges at the right moment.** Marking a job ready or applied tells you who to reach, which form questions are unanswered and whether the posting has gone stale. Optional scheduled runs give a daily brief, a scan for fresh postings and a weekly review.
+- **Finds roles and people.** Optional search saves postings as leads and lists people at a company. Nothing is sent on your behalf; Gmail support is draft-only.
+- **Shows it all.** A local cockpit, also available as a tab in the Hermes dashboard.
 
-```bash
-python3 -m hermes_jobapps.server --port 8765
-```
+## Install
 
-Then open [http://127.0.0.1:8765](http://127.0.0.1:8765).
+Requires Python 3.11+ and Hermes 0.21 or newer.
 
-Run the complete standard-library test suite with:
-
-```bash
-python3 -m unittest discover -s tests
-```
-
-Hermes, Typst, Tectonic, Poppler, Exa, and `gog` are optional integrations.
-Features that need them report a visible missing-tool or missing-key state; the
-base cockpit still starts without them.
-
-For a detachable local process, use a terminal multiplexer such as `screen`:
-
-```bash
-screen -dmS hermes-jobapps sh -lc 'python3 -m hermes_jobapps.server --port 8765'
-screen -r hermes-jobapps
-```
-
-A separate `screen` is just a named terminal session that can keep the app
-running after you detach from it.
-
-## Connect Hermes
-
-Run Hermes with the API server enabled, preferably in a dedicated profile. In
-Hermes, a profile has its own config, `.env`, sessions, memory, skills, and
-gateway process. JobApps only needs the API server, but Hermes hosts that API
-from the profile gateway process.
-
-```bash
-hermes profile create jobapps
-cat >> ~/.hermes/profiles/jobapps/.env <<'EOF'
-API_SERVER_ENABLED=true
-API_SERVER_PORT=8642
-API_SERVER_KEY=<local-api-key>
-API_SERVER_MODEL_NAME=jobapps
-HERMES_ENABLE_PROJECT_PLUGINS=true
-EOF
-
-# Keep this profile API-only if your default Hermes profile already owns
-# Discord/Slack/etc. messaging tokens.
-hermes --profile jobapps gateway start
-```
-
-Point the cockpit at that API:
-
-```bash
-export HERMES_API_BASE=http://127.0.0.1:8642/v1
-export HERMES_API_KEY=<local-api-key>
-export HERMES_API_MODEL=jobapps
-python3 -m hermes_jobapps.server
-```
-
-For local use, you can also put the API settings in ignored
-`config/jobapps.local.json` instead of exporting them each time.
-
-The committed `.hermes/plugins/jobapps` plugin exposes JobApps database tools,
-the `/jobapps` command, context injection, and a workflow skill to native Hermes
-sessions. Enable project plugins in the Hermes environment you use for this repo:
-
-```bash
-export HERMES_ENABLE_PROJECT_PLUGINS=true
+```sh
+hermes plugins install Prashant002-1/hermes-jobapps
 hermes plugins enable jobapps
 ```
 
-The cockpit chat sends normal conversation to the `jobapps` profile API using
-streaming Responses events. Native Hermes slash commands such as `/help`,
-`/profile`, `/model`, and `/jobapps` route through Hermes' own command surfaces
-for the same profile. The UI also reads Hermes' command catalog so slash
-commands and installed skill commands can appear in the chat composer.
+Start a new Hermes session and say:
 
-## Session State Behavior
+> Set up my JobApps workspace.
 
-Hermes owns chat session history. JobApps owns application data. The browser
-owns only a lightweight cockpit checkpoint.
+The onboarding skill creates `~/JobApps`, fills your profile and builds one evidence file per experience from your existing resume.
 
-- Completed Hermes chat turns are stored by the `jobapps` Hermes profile.
-- JobApps writes structured state to SQLite as each tool/workflow step happens.
-- The browser saves the active chat selection, visible recent transcript,
-  current view, draft composer text, last usage panel, and in-flight turn marker
-  to local storage as those values change.
-- Closing or refreshing the tab does not send a special shutdown signal. On the
-  next load, the cockpit restores its local checkpoint. If a turn was in flight,
-  it is shown as interrupted instead of treated as complete.
-- If the local browser checkpoint is missing, use the Sessions panel to resume a
-  Hermes session from the profile store.
+To set the folder up by hand instead:
 
-## Generated Materials
-
-Generated application materials are app-owned rows in SQLite with optional local
-files under the configured `materials_path` (`data/materials` by default).
-Native Hermes tools should author, edit, compile, and QA candidate-facing files;
-JobApps links finished artifacts and provenance after the material is good.
-Legacy/internal helpers may still create files under:
-
-```text
-data/materials/<job_id>/resume_tailoring.typ
-data/materials/<job_id>/cover_letter.tex
-data/materials/<job_id>/resume.typ
-data/materials/<job_id>/<material_kind>.typ or .tex
-data/materials/<job_id>/<material_name>.pdf
+```sh
+python3 -m hermes_jobapps init --name "Your Name"
+python3 -m hermes_jobapps doctor
 ```
 
-`<job_id>` is the 12-character JobApps job id, so multiple job descriptions in
-the same Hermes conversation get separate material folders and do not overwrite
-each other. The Materials tab shows generated artifacts, compile status, PDF
-links when available. Old resumes, cover letters, CVs, and private seed files
-should be imported into structured database records when their facts still
-matter; they are not browsed as a live app surface.
+Run those from the plugin folder (`~/.hermes/plugins/jobapps`).
 
-## Discovery
+## Use
 
-The Discovery view is a removable feed layer. It stores candidate jobs separately
-from application jobs, hydrates Greenhouse, Lever, and Ashby URLs through their
-official public job surfaces, and promotes a candidate into the normal JobApps
-workflow only when you choose Prepare. The implementation notes and removal
-boundary live in [docs/DISCOVERY.md](docs/DISCOVERY.md).
+Talk to Hermes as you normally would:
 
-Exa search is configured through an environment variable. Keep the key outside
-git, for example in the dedicated Hermes profile env or your shell:
+- "Here's a posting: <link>. Tailor my resume."
+- "Write the cover letter for the Northstar role."
+- "I applied to Fieldwork today."
+- "What should I follow up on this week?"
+- "Find engineering managers at Northstar and draft a note."
+- "I have a technical screen with Meridian on Thursday. Help me prepare."
 
-```bash
-export EXA_API_KEY=<exa-api-key>
+Or open the cockpit:
+
+```sh
+python3 -m hermes_jobapps ui
 ```
 
-Without `EXA_API_KEY`, ATS URL hydration still works and Exa search reports a
-missing-key status. Set `discovery.enabled` to `false` to disable search,
-hydrate, and promote actions while leaving already-promoted JobApps records
-alone.
+## The workspace
 
-The same key also powers networking people search. Hermes can cache public
-contacts with `jobapps_find_people` and create Gmail drafts with
-`jobapps_create_gmail_draft`, which calls `gog --gmail-no-send gmail drafts
-create`. JobApps exposes no email-send tool.
-
-The People tab is separate from those discovered contacts. It contains only
-people the user explicitly chose to track. Agents use the same database contract:
-
-- `jobapps_upsert_person` adds or updates a person and requires why they were saved.
-- `jobapps_list_people` reads or searches the personal tracker.
-- `jobapps_add_person_note` appends context without replacing earlier notes.
-- `jobapps_create_gmail_draft` can later use the returned person ID as its `contact_id`.
-
-Hermes receives these through the project plugin. Codex or another local agent
-can use the existing HTTP wrapper without Hermes-specific code:
-
-```bash
-curl -X POST http://127.0.0.1:8765/api/tools/jobapps_upsert_person \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Avery Patel","linkedin_url":"https://www.linkedin.com/in/avery-patel","why_added":"Builds agent infrastructure I want to learn about.","source":"codex"}'
+```
+~/JobApps/
+  profile/profile.md     who you are, what you want, constraints
+  profile/voice.md       how you write
+  profile/playbook.md    rules learned from your corrections
+  evidence/*.md          one file per experience, project, degree or award
+  jobs/<id>/             job.md plus the resume, letter, answers and PDFs
+  people/*.md            people you chose to track
+  leads/*.md             postings found by search, not yet decided
+  templates/             your base resume and letter
+  settings.json          blockers and follow-up timing
 ```
 
-The default Hermes dashboard can keep running separately:
+Set `JOBAPPS_HOME` to use a different folder. Correct the agent once and it updates `playbook.md`; you can edit that file yourself at any time.
 
-```bash
-hermes dashboard --tui
+## Optional tools
+
+| Tool | Used for |
+|---|---|
+| [Typst](https://typst.app) | Building resumes and letters. |
+| Tectonic | Building TeX letters. |
+| Poppler (`pdftotext`, `pdfinfo`) | Resume layout checks. |
+| `EXA_API_KEY` | Job and people search. |
+| `gog` | Gmail drafts. |
+
+`python3 -m hermes_jobapps doctor` reports which are present. Everything else works without them.
+
+## Coming from the SQLite version
+
+```sh
+python3 -m hermes_jobapps migrate path/to/hermes-jobapps.sqlite3 --dry-run
+python3 -m hermes_jobapps migrate path/to/hermes-jobapps.sqlite3
 ```
 
-That dashboard is for the active/default Hermes profile unless launched with a
-different profile. JobApps talks to the dedicated `jobapps` API profile.
+The old database is opened read-only and left untouched. Profile facts, proof points, active rules, jobs with their documents, tracked people and recent leads are written as files; `MIGRATION.md` in the workspace lists what was carried over.
 
-## Data Model
+## Privacy
 
-The SQLite database is the source of truth for app data:
+The plugin stores nothing outside your workspace folder and sends nothing anywhere except the searches you ask for. Keep the workspace out of public repositories. See [Privacy.md](Privacy.md).
 
-- profile facts and proof points with lifecycle state
-- discovery candidates and source sightings
-- application signals extracted from pasted jobs
-- tailoring requirements extracted from JD needs
-- portrayal decisions linking requirements to material framing
-- learning patterns from reusable corrections/preferences
-- retrieval chunks and local FTS search over eligible evidence
-- jobs and evaluations
-- prompt builds
-- `.typ` resume and Typst/TeX cover-letter materials
-- research notes
-- application changes
-- discovered contacts, explicitly tracked people, progress, follow-ups, approvals
-- Hermes run/session IDs
+## Development
 
-The cockpit surfaces pending approval gates and read-only database health. Health
-checks show stale or unattached records so you can review them before using the
-database for a real application; they do not delete private app state.
-
-Private seed files can populate the database, but they are not runtime source of truth or schema.
-
-Import private structured seed records when useful:
-
-```bash
-python3 -m hermes_jobapps.importer private/profile-seed.json --dry-run
-python3 -m hermes_jobapps.importer private/profile-seed.json
+```sh
+python3 -m unittest discover -s tests
+node --test tests/test_cockpit.cjs
 ```
 
-Non-JSON private files must include a `JOBAPPS_IMPORT_RECORDS` JSON block with
-`profile_facts` and/or `proof_points`; the app never parses `knowledge_base.html`
-as a live schema.
-
-## What Exists
-
-- `hermes_jobapps/`: SQLite repository, tools, Hermes client, prompt builder, Typst resume helpers, deterministic resume QA, TeX cover-letter/legacy helpers, workflow, and HTTP server.
-- `.hermes/plugins/jobapps/`: Hermes-native tool and context bridge.
-- `web/`: the cockpit UI.
-- `config/jobapps.default.json`: committed, non-secret runtime defaults.
-- `config/jobapps.example.yaml`: human-readable example settings.
-- `docs/ARCHITECTURE_RESEARCH.md`: research-backed architecture notes.
-- `docs/BRANDING.md`: Hermes-native JobApps visual and naming guidance.
-- `design-system/`: extracted Hermes visual tokens and component references.
-- `Privacy.md`: privacy and repo-boundary rules.
-- `tests/`: standard-library tests for the workflow engine and database.
-
-## Privacy Boundary
-
-Do not commit local profile data, generated materials, SQLite databases, exports, resumes, cover letters, secrets, or `.env` files. The committed app code should be publishable without exposing backend private data.
-
-Keep `docs/` public-safe. Local-only secrets, private profile notes, generated
-materials, and machine-specific runtime data belong in ignored config/profile
-files, not in repo documentation.
-
-See [Privacy.md](Privacy.md).
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the design. Licensed under MIT.

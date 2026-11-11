@@ -1,0 +1,13 @@
+{
+  "name": "jobapps",
+  "label": "JobApps",
+  "description": "Job-search cockpit over the workspace folder: what is due, the pipeline, documents and their checks, people and leads.",
+  "icon": "FileText",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/jobapps"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}
